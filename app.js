@@ -20,6 +20,8 @@
     },
     // 当前页面视图。
     view: 'config',
+    // 打开抽屉前的焦点元素，关闭后把焦点还给原来的操作入口。
+    drawerReturnFocus: null,
     // 是否存在正在运行或停止中的真实流水线。
     running: false,
     // 当前真实流水线是否正在停止。
@@ -85,6 +87,22 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
+  }
+
+  // 使用页面内轻提示承载成功、失败和校验结果，避免频繁弹出阻塞式对话框。
+  function notify(message, type, duration) {
+    var container = $('#toast-container');
+    if (!container) return;
+
+    var toast = document.createElement('div');
+    toast.className = 'toast' + (type ? ' is-' + type : '');
+    toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+    toast.textContent = String(message || '');
+    container.appendChild(toast);
+
+    window.setTimeout(function () {
+      if (toast.parentNode) toast.parentNode.removeChild(toast);
+    }, duration || (type === 'error' ? 6000 : 3600));
   }
 
   // 统一请求后端 JSON 接口，并把后端错误转换成可读异常。
@@ -173,15 +191,17 @@
     });
 
     if (!parsed.length) {
-      window.alert('任务列表不能为空。');
+      notify('任务列表不能为空。', 'warning');
       return null;
     }
     if (invalid.length) {
-      window.alert(
+      notify(
         '发现 ' + invalid.length + ' 条格式错误：\n' +
         invalid.map(function (task) {
           return '- ' + task.raw + '（' + task.reason + '）';
-        }).join('\n')
+        }).join('\n'),
+        'error',
+        8000
       );
       return null;
     }
@@ -641,12 +661,14 @@
         var canDelete = Boolean(system.managed && !system.readOnly && sourceCount === 0);
         return '<div class="source-system-item' +
             (management.selectedSystemId === systemId ? ' is-active' : '') +
-            '" data-source-system-id="' + escapeHtml(systemId) + '" role="button" tabindex="0">' +
+            '" data-source-system-id="' + escapeHtml(systemId) + '" role="button" tabindex="0" aria-pressed="' +
+            (management.selectedSystemId === systemId ? 'true' : 'false') + '">' +
           '<span class="source-system-name"><strong>' + escapeHtml(system.label || systemId) + '</strong>' +
             '<small>' + escapeHtml(systemId + ' · ' + sourceCount + ' 个数据源') + '</small></span>' +
           (system.readOnly ? '<span class="pill">只读</span>' : '') +
           (canDelete ? '<button class="btn btn-ghost btn-sm" type="button" data-delete-source-system="' +
-            escapeHtml(systemId) + '"' + (mutationDisabled ? ' disabled' : '') + '>删除</button>' : '') +
+            escapeHtml(systemId) + '" aria-label="删除业务系统 ' + escapeHtml(system.label || systemId) + '"' +
+            (mutationDisabled ? ' disabled' : '') + '>删除</button>' : '') +
           '</div>';
       }).join('') || '<p class="muted">暂无业务系统，可先新增系统。</p>';
     }
@@ -902,8 +924,7 @@
       });
     });
 
-    $('#drawer').classList.add('is-open');
-    $('#drawer-backdrop').classList.add('is-open');
+    showDrawer();
   }
 
   function validateManagedSource(sourceId) {
@@ -1067,7 +1088,7 @@
       return state.history;
     }).catch(function (error) {
       if (showError) {
-        window.alert('读取运行记录失败：' + error.message);
+        notify('读取运行记录失败：' + error.message, 'error');
       }
       throw error;
     });
@@ -1192,13 +1213,11 @@
       }
     });
 
-    var cards = document.querySelectorAll('.stat strong');
-    if (cards.length >= 4) {
-      cards[0].textContent = pending;
-      cards[1].textContent = running;
-      cards[2].textContent = succeeded;
-      cards[3].textContent = failed;
-    }
+    // 通过稳定 ID 更新摘要，避免依赖 DOM 顺序，也让读屏器能感知数值变化。
+    $('#stat-pending').textContent = pending;
+    $('#stat-running').textContent = running;
+    $('#stat-succeeded').textContent = succeeded;
+    $('#stat-failed').textContent = failed;
   }
 
   function renderPipelineStatus(payload) {
@@ -1243,11 +1262,11 @@
         // 运行结果仍可在监控页查看，历史列表稍后可手动刷新。
       });
       if (payload.status === 'succeeded') {
-        window.alert('真实流水线进程已结束。请在运行监控中查看每张表的综合终态。');
+        notify('真实流水线进程已结束。请在运行监控中查看每张表的综合终态。', 'success');
       } else if (payload.status === 'stopped') {
-        window.alert('真实流水线已手动停止。已执行的生产操作不会自动回滚，请检查运行日志和任务状态。');
+        notify('真实流水线已手动停止。已执行的生产操作不会自动回滚，请检查运行日志和任务状态。', 'warning', 7000);
       } else {
-        window.alert('真实流水线执行失败，请查看运行日志。');
+        notify('真实流水线执行失败，请查看运行日志。', 'error', 7000);
       }
     }
   }
@@ -1280,7 +1299,7 @@
       return payload;
     }).catch(function (error) {
       if (showError) {
-        window.alert('读取流水线状态失败：' + error.message);
+        notify('读取流水线状态失败：' + error.message, 'error');
       }
       throw error;
     });
@@ -1328,18 +1347,36 @@
   function switchView(view) {
     state.view = view;
     document.querySelectorAll('.nav-item').forEach(function (button) {
-      button.classList.toggle('is-active', button.dataset.view === view);
+      var active = button.dataset.view === view;
+      button.classList.toggle('is-active', active);
+      if (active) {
+        button.setAttribute('aria-current', 'page');
+      } else {
+        button.removeAttribute('aria-current');
+      }
     });
     document.querySelectorAll('.view').forEach(function (section) {
       section.classList.toggle('is-active', section.id === 'view-' + view);
     });
     $('#page-title').textContent = PAGE_TITLES[view].title;
     $('#page-subtitle').textContent = PAGE_TITLES[view].subtitle;
+    document.title = PAGE_TITLES[view].title + '｜入湖流水线控制台';
     if (view === 'sources' && !state.sourceManagement.loaded && !state.sourceManagement.loading) {
       loadSourceManagement().catch(function () {
         // 管理视图内已显示加载错误，保留页面供用户刷新重试。
       });
     }
+  }
+
+  // 统一打开抽屉的行为，保证焦点管理和 ARIA 状态在所有详情场景中一致。
+  function showDrawer() {
+    state.drawerReturnFocus = document.activeElement;
+    $('#drawer').setAttribute('aria-hidden', 'false');
+    $('#drawer').classList.add('is-open');
+    $('#drawer-backdrop').classList.add('is-open');
+    window.setTimeout(function () {
+      $('#drawer-close').focus();
+    }, 0);
   }
 
   function openDrawer(resultId) {
@@ -1366,8 +1403,7 @@
         '</dt><dd>' + escapeHtml(pair[1]) + '</dd></div>';
     }).join('') + '</dl>';
 
-    $('#drawer').classList.add('is-open');
-    $('#drawer-backdrop').classList.add('is-open');
+    showDrawer();
   }
 
   function retryFailedResult(resultId) {
@@ -1407,15 +1443,15 @@
       state.running = false;
       renderResults();
       setRunningUI(false);
-      window.alert('失败任务重跑提交失败：' + error.message);
+      notify('失败任务重跑提交失败：' + error.message, 'error');
     });
   }
 
   function openHistoryDrawer(runId) {
-    $('#drawer').classList.add('is-history', 'is-open');
-    $('#drawer-backdrop').classList.add('is-open');
+    $('#drawer').classList.add('is-history');
     $('#drawer-title').textContent = '运行记录详情';
     $('#drawer-body').innerHTML = '<p class="muted">正在加载运行记录…</p>';
+    showDrawer();
 
     api.fetchPipelineHistoryDetail(runId).then(function (record) {
       var displayStatus = historyStatus(record.status);
@@ -1465,10 +1501,22 @@
   function closeDrawer() {
     $('#drawer').classList.remove('is-open', 'is-history');
     $('#drawer-backdrop').classList.remove('is-open');
+    $('#drawer').setAttribute('aria-hidden', 'true');
+    if (state.drawerReturnFocus && typeof state.drawerReturnFocus.focus === 'function') {
+      state.drawerReturnFocus.focus();
+    }
+    state.drawerReturnFocus = null;
   }
 
   // ============ 事件绑定 ============
   function bindEvents() {
+    // 支持使用 Esc 关闭详情抽屉，避免键盘用户必须定位到关闭按钮。
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape' && $('#drawer').classList.contains('is-open')) {
+        closeDrawer();
+      }
+    });
+
     document.querySelectorAll('.nav-item').forEach(function (button) {
       button.addEventListener('click', function () {
         switchView(button.dataset.view);
@@ -1651,14 +1699,14 @@
       if (id == null) return;
       id = id.trim();
       if (!/^[a-z][a-z0-9_]{1,39}$/.test(id)) {
-        window.alert('业务系统 ID 格式错误，应以小写字母开头，且为 2-40 位小写字母、数字或下划线。');
+        notify('业务系统 ID 格式错误，应以小写字母开头，且为 2-40 位小写字母、数字或下划线。', 'warning');
         return;
       }
       var label = window.prompt('请输入业务系统显示名称：');
       if (label == null) return;
       label = label.trim();
       if (!label) {
-        window.alert('业务系统显示名称不能为空。');
+        notify('业务系统显示名称不能为空。', 'warning');
         return;
       }
 
@@ -1726,7 +1774,7 @@
     $('#btn-validate').addEventListener('click', function () {
       var tasks = getValidTasksOrAlert();
       if (tasks) {
-        window.alert('格式校验通过，共 ' + tasks.length + ' 条任务。');
+        notify('格式校验通过，共 ' + tasks.length + ' 条任务。', 'success');
       }
     });
 
@@ -1749,9 +1797,9 @@
           .map(parseTaskLine)
           .filter(Boolean);
         renderConfig();
-        window.alert('已写入正式 resource.text。');
+        notify('已写入正式 resource.text。', 'success');
       }).catch(function (error) {
-        window.alert('保存任务失败：' + error.message);
+        notify('保存任务失败：' + error.message, 'error');
       });
     });
 
@@ -1786,7 +1834,7 @@
         return pollPipelineStatus(false);
       }).catch(function (error) {
         setRunningUI(false);
-        window.alert('启动真实流水线失败：' + error.message);
+        notify('启动真实流水线失败：' + error.message, 'error');
       });
     });
 
@@ -1808,7 +1856,7 @@
         startPolling();
         return pollPipelineStatus(false);
       }).catch(function (error) {
-        window.alert('停止真实流水线失败：' + error.message);
+        notify('停止真实流水线失败：' + error.message, 'error');
         pollPipelineStatus(false).catch(function () {
           setRunningUI(state.running, false);
         });
@@ -1835,15 +1883,15 @@
       };
       var clobErrors = getClobWhitelistErrors(mapping.clob);
       if (clobErrors.length) {
-        window.alert('CLOB 白名单格式错误：\n' + clobErrors.join('\n'));
+        notify('CLOB 白名单格式错误：\n' + clobErrors.join('\n'), 'error', 8000);
         return;
       }
 
       api.saveMapping(mapping).then(function () {
         state.mapping = mapping;
-        window.alert('已写入正式系统映射、脚本映射和 CLOB 白名单文件。');
+        notify('已写入正式系统映射、脚本映射和 CLOB 白名单文件。', 'success');
       }).catch(function (error) {
-        window.alert('保存映射失败：' + error.message);
+        notify('保存映射失败：' + error.message, 'error');
       });
     });
 
@@ -1921,9 +1969,11 @@
       renderCatalog();
       setRunningUI(false);
       $('#btn-run').disabled = true;
-      window.alert(
+      notify(
         '未连接到真实入湖后端：' + error.message +
-        '\n请运行 start_lake_ui.py 启动控制台。'
+        '\n请运行 start_lake_ui.py 启动控制台。',
+        'error',
+        9000
       );
     });
   }

@@ -4,9 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>入湖流水线控制台</title>
-  <link rel="stylesheet" href="styles.css" />
+  <!-- 版本号用于静态部署后的缓存刷新，避免浏览器继续使用旧样式。 -->
+  <link rel="stylesheet" href="styles.css?v=20260817-2" />
 </head>
 <body>
+  <!-- 为键盘用户提供跳过重复导航、直达主内容的入口。 -->
+  <a class="skip-link" href="#main-content">跳到主内容</a>
   <div class="app">
     <!-- 左侧导航 -->
     <aside class="sidebar">
@@ -18,32 +21,32 @@
         </div>
       </div>
 
-      <nav class="nav">
-        <button class="nav-item is-active" data-view="config">
+      <nav class="nav" aria-label="主导航">
+        <button class="nav-item is-active" data-view="config" aria-label="任务配置" title="任务配置">
           <span class="nav-icon">&#9644;</span>任务配置
         </button>
-        <button class="nav-item" data-view="monitor">
+        <button class="nav-item" data-view="monitor" aria-label="运行监控" title="运行监控">
           <span class="nav-icon">&#9678;</span>运行监控
         </button>
-        <button class="nav-item" data-view="history">
+        <button class="nav-item" data-view="history" aria-label="运行记录" title="运行记录">
           <span class="nav-icon">&#8635;</span>运行记录
         </button>
-        <button class="nav-item" data-view="sources">
+        <button class="nav-item" data-view="sources" aria-label="数据源管理" title="数据源管理">
           <span class="nav-icon">&#9673;</span>数据源管理
         </button>
-        <button class="nav-item" data-view="mapping">
+        <button class="nav-item" data-view="mapping" aria-label="映射管理" title="映射管理">
           <span class="nav-icon">&#8660;</span>映射管理
         </button>
       </nav>
 
       <div class="sidebar-footer">
-        <div class="env-badge">正在连接</div>
+        <div class="env-badge" role="status" aria-live="polite">正在连接</div>
         <p class="hint">真实执行正式 run_pipeline.py</p>
       </div>
     </aside>
 
     <!-- 主内容区 -->
-    <main class="main">
+    <main class="main" id="main-content" tabindex="-1">
       <header class="topbar">
         <div>
           <h1 id="page-title">任务配置</h1>
@@ -58,13 +61,27 @@
 
       <!-- 视图：任务配置 -->
       <section class="view is-active" id="view-config">
+        <!-- 首屏概览：让用户进入页面后先看到当前工作模式和下一步动作。 -->
+        <div class="config-hero">
+          <div class="config-hero-copy">
+            <span class="eyebrow">ODS / PIPELINE WORKSPACE</span>
+            <h2>准备下一批入湖任务</h2>
+            <p>从目录选择数据表，自动生成任务并在启动前完成格式校验。</p>
+          </div>
+          <div class="config-hero-meta">
+            <span class="hero-status"><i></i>真实执行模式</span>
+            <span class="hero-divider"></span>
+            <span>安全确认后才会启动生产流水线</span>
+          </div>
+        </div>
+
         <div class="card catalog-card" id="catalog-selector">
           <div class="card-head">
             <div>
               <h2>可视化选表</h2>
               <p class="muted catalog-description">从业务系统选择数据源 / 数据库和待入湖表。</p>
             </div>
-            <span class="badge" id="catalog-status">等待连接</span>
+            <span class="badge" id="catalog-status" role="status" aria-live="polite">等待连接</span>
           </div>
 
           <div class="catalog-steps">
@@ -126,6 +143,7 @@
               <h2>待入湖任务</h2>
               <span class="badge" id="task-count">0 条</span>
             </div>
+            <label class="field-label" for="task-input">待入湖任务内容</label>
             <p class="muted">每行一条：<code>[别名] [源表名] [操作描述]</code>，操作描述需包含「表」或「字段」。</p>
             <textarea id="task-input" class="task-textarea" spellcheck="false" placeholder="sub2sr ods_sub_sub_write_sr_person_attr_t 表&#10;oa2sr FORM_INFO_T 字段"></textarea>
             <div class="row-actions">
@@ -154,11 +172,11 @@
 
       <!-- 视图：运行监控 -->
       <section class="view" id="view-monitor">
-        <div class="summary-grid">
-          <div class="stat"><strong>0</strong><span>待执行</span></div>
-          <div class="stat"><strong>0</strong><span>进行中</span></div>
-          <div class="stat stat-ok"><strong>0</strong><span>完美完成</span></div>
-          <div class="stat stat-warn"><strong>0</strong><span>失败 / 中断</span></div>
+        <div class="summary-grid" aria-label="运行摘要">
+          <div class="stat"><strong id="stat-pending">0</strong><span>待执行</span></div>
+          <div class="stat"><strong id="stat-running">0</strong><span>进行中</span></div>
+          <div class="stat stat-ok"><strong id="stat-succeeded">0</strong><span>完美完成</span></div>
+          <div class="stat stat-warn"><strong id="stat-failed">0</strong><span>失败 / 中断</span></div>
         </div>
 
         <div class="card">
@@ -190,7 +208,7 @@
         <div class="card">
           <div class="card-head">
             <h2>运行日志</h2>
-            <span class="muted" id="log-meta">暂无运行</span>
+            <span class="muted" id="log-meta" role="status" aria-live="polite">暂无运行</span>
           </div>
           <pre class="log" id="log-panel">等待启动流水线…</pre>
         </div>
@@ -285,16 +303,19 @@
           <div class="card">
             <div class="card-head"><h2>系统标准映射</h2></div>
             <p class="muted">对应「用户填写系统标准映射.txt」，用于校验别名并解析任务名。</p>
+            <label class="field-label" for="mapping-system">系统标准映射内容</label>
             <textarea id="mapping-system" class="task-textarea" spellcheck="false"></textarea>
           </div>
           <div class="card">
             <div class="card-head"><h2>任务脚本映射</h2></div>
             <p class="muted">对应「job_py_script_mapping.txt」，配置测试与生产初始化脚本。</p>
+            <label class="field-label" for="mapping-script">任务脚本映射内容</label>
             <textarea id="mapping-script" class="task-textarea" spellcheck="false"></textarea>
           </div>
           <div class="card">
             <div class="card-head"><h2>CLOB 白名单</h2></div>
             <p class="muted">对应「clob_tables.txt」，每行格式为“系统.Schema.表名”，例如 bpm.GROUPHR.techcrm_chances。</p>
+            <label class="field-label" for="mapping-clob">CLOB 白名单内容</label>
             <textarea id="mapping-clob" class="task-textarea" spellcheck="false" placeholder="系统.Schema.表名"></textarea>
           </div>
         </div>
@@ -311,7 +332,7 @@
 
   <!-- 任务及运行记录详情抽屉 -->
   <div class="drawer-backdrop" id="drawer-backdrop"></div>
-  <aside class="drawer" id="drawer">
+  <aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-hidden="true">
     <div class="drawer-head">
       <h2 id="drawer-title">任务详情</h2>
       <button class="btn btn-ghost btn-sm" id="drawer-close">关闭</button>
@@ -319,7 +340,10 @@
     <div class="drawer-body" id="drawer-body"></div>
   </aside>
 
-  <script src="app.js"></script>
+  <!-- 非阻塞操作反馈，避免用户被连续弹窗打断工作流。 -->
+  <div class="toast-container" id="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+  <script src="app.js?v=20260817-2" defer></script>
 </body>
 </html>
 
