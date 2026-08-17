@@ -1,0 +1,326 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>入湖流水线控制台</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- 左侧导航 -->
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <div class="brand-text">
+          <strong>入湖控制台</strong>
+          <small>ODS 层一键上线</small>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-item is-active" data-view="config">
+          <span class="nav-icon">&#9644;</span>任务配置
+        </button>
+        <button class="nav-item" data-view="monitor">
+          <span class="nav-icon">&#9678;</span>运行监控
+        </button>
+        <button class="nav-item" data-view="history">
+          <span class="nav-icon">&#8635;</span>运行记录
+        </button>
+        <button class="nav-item" data-view="sources">
+          <span class="nav-icon">&#9673;</span>数据源管理
+        </button>
+        <button class="nav-item" data-view="mapping">
+          <span class="nav-icon">&#8660;</span>映射管理
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="env-badge">正在连接</div>
+        <p class="hint">真实执行正式 run_pipeline.py</p>
+      </div>
+    </aside>
+
+    <!-- 主内容区 -->
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1 id="page-title">任务配置</h1>
+          <p id="page-subtitle">维护正式 resource.text，并启动真实入湖流水线</p>
+        </div>
+        <div class="topbar-actions">
+          <button class="btn btn-ghost" id="btn-validate">校验格式</button>
+          <button class="btn btn-primary" id="btn-run">&#9654; 启动真实流水线</button>
+          <button class="btn btn-danger" id="btn-stop" hidden>&#9632; 手动停止入湖</button>
+        </div>
+      </header>
+
+      <!-- 视图：任务配置 -->
+      <section class="view is-active" id="view-config">
+        <div class="card catalog-card" id="catalog-selector">
+          <div class="card-head">
+            <div>
+              <h2>可视化选表</h2>
+              <p class="muted catalog-description">从业务系统选择数据源 / 数据库和待入湖表。</p>
+            </div>
+            <span class="badge" id="catalog-status">等待连接</span>
+          </div>
+
+          <div class="catalog-steps">
+            <fieldset class="selector-step">
+              <legend><span class="selector-step-num">1</span>业务系统</legend>
+              <div class="selector-options" id="catalog-systems">
+                <p class="muted">正在等待目录服务…</p>
+              </div>
+            </fieldset>
+
+            <fieldset class="selector-step">
+              <legend><span class="selector-step-num">2</span>数据源 / 数据库（可多选）</legend>
+              <div class="selector-options" id="catalog-targets">
+                <p class="muted">请先选择业务系统</p>
+              </div>
+            </fieldset>
+
+            <fieldset class="selector-step selector-step-wide">
+              <legend><span class="selector-step-num">3</span>搜索并选择表</legend>
+              <form id="catalog-search-form" class="catalog-search-form">
+                <label for="catalog-query">表名（支持逗号、中文逗号或换行分隔）</label>
+                <textarea id="catalog-query" class="catalog-control catalog-query" rows="3" disabled placeholder="例如：user_info, order_detail&#10;product_info"></textarea>
+                <button class="btn btn-secondary catalog-control" id="btn-catalog-search" type="submit" disabled>搜索表</button>
+              </form>
+              <div class="catalog-feedback" id="catalog-feedback" aria-live="polite"></div>
+              <div class="selector-options table-options" id="catalog-results">
+                <p class="muted">请选择数据源 / 数据库并输入表名</p>
+              </div>
+            </fieldset>
+          </div>
+
+          <div class="selected-table-panel">
+            <div class="selected-table-head">
+              <strong>已选表</strong>
+              <div class="selected-table-actions">
+                <span class="badge" id="selected-table-count">0 张</span>
+                <button class="btn btn-ghost btn-sm catalog-control" id="btn-clear-selected-tables" type="button" disabled>清空</button>
+              </div>
+            </div>
+            <div class="selected-tags" id="selected-table-tags" aria-live="polite">
+              <span class="muted">尚未选择表</span>
+            </div>
+          </div>
+
+          <div class="catalog-submit-row">
+            <fieldset class="operation-options">
+              <legend>操作类型</legend>
+              <label><input class="catalog-control" type="radio" name="catalog-operation" value="表" checked disabled /> 新建表</label>
+              <label><input class="catalog-control" type="radio" name="catalog-operation" value="字段" disabled /> 新增字段</label>
+            </fieldset>
+            <span class="spacer"></span>
+            <button class="btn btn-primary catalog-control" id="btn-add-selected-tasks" type="button" disabled>加入待入湖任务</button>
+          </div>
+        </div>
+
+        <div class="grid-config">
+          <div class="card">
+            <div class="card-head">
+              <h2>待入湖任务</h2>
+              <span class="badge" id="task-count">0 条</span>
+            </div>
+            <p class="muted">每行一条：<code>[别名] [源表名] [操作描述]</code>，操作描述需包含「表」或「字段」。</p>
+            <textarea id="task-input" class="task-textarea" spellcheck="false" placeholder="sub2sr ods_sub_sub_write_sr_person_attr_t 表&#10;oa2sr FORM_INFO_T 字段"></textarea>
+            <div class="row-actions">
+              <button class="btn btn-ghost" id="btn-add-example">插入示例</button>
+              <span class="spacer"></span>
+              <button class="btn btn-secondary" id="btn-save">写入正式任务文件</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h2>流水线阶段</h2>
+            </div>
+            <ol class="stage-list">
+              <li class="stage"><span class="stage-num">0</span>前置校验</li>
+              <li class="stage"><span class="stage-num">1</span>测试环境初始化</li>
+              <li class="stage"><span class="stage-num">2</span>停止 SeaTunnel</li>
+              <li class="stage"><span class="stage-num">3</span>生产环境初始化</li>
+              <li class="stage"><span class="stage-num">4</span>生成并上传 Conf</li>
+              <li class="stage"><span class="stage-num">5</span>启动 SeaTunnel</li>
+            </ol>
+            <p class="muted">全链路成功通过后，任务会自动从任务列表清空；失败记录会自动回写，便于修复后重试。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 视图：运行监控 -->
+      <section class="view" id="view-monitor">
+        <div class="summary-grid">
+          <div class="stat"><strong>0</strong><span>待执行</span></div>
+          <div class="stat"><strong>0</strong><span>进行中</span></div>
+          <div class="stat stat-ok"><strong>0</strong><span>完美完成</span></div>
+          <div class="stat stat-warn"><strong>0</strong><span>失败 / 中断</span></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>任务执行总览</h2>
+            <button class="btn btn-ghost btn-sm" id="btn-refresh">刷新</button>
+          </div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>别名</th>
+                  <th>源表名</th>
+                  <th>操作</th>
+                  <th>测试初始化</th>
+                  <th>停 SeaTunnel</th>
+                  <th>生产初始化</th>
+                  <th>生成 Conf</th>
+                  <th>启 SeaTunnel</th>
+                  <th>最终结果</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="result-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>运行日志</h2>
+            <span class="muted" id="log-meta">暂无运行</span>
+          </div>
+          <pre class="log" id="log-panel">等待启动流水线…</pre>
+        </div>
+      </section>
+
+      <!-- 视图：运行记录 -->
+      <section class="view" id="view-history">
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>历史运行记录</h2>
+              <p class="muted history-description">保留最近 100 次运行，可查看任务、逐表结果和历史日志。</p>
+            </div>
+            <button class="btn btn-ghost btn-sm" id="btn-history-refresh">刷新</button>
+          </div>
+          <div class="table-wrap">
+            <table class="table history-table">
+              <thead>
+                <tr>
+                  <th>开始时间</th>
+                  <th>耗时</th>
+                  <th>任务数</th>
+                  <th>涉及表</th>
+                  <th>任务状态</th>
+                  <th>退出码</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="history-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- 视图：数据源管理 -->
+      <section class="view" id="view-sources">
+        <div class="card source-security-note">
+          <strong>渐进兼容模式</strong>
+          <span>现有数据源只读展示；新数据源统一注册并使用 Windows DPAPI 加密密码。连接验证并补齐物理任务参数后，即可进入选表并运行完整入湖流水线。</span>
+        </div>
+        <div class="source-management-grid">
+          <div class="card source-system-card">
+            <div class="card-head">
+              <div>
+                <h2>业务系统</h2>
+                <p class="muted">选择系统查看数据源</p>
+              </div>
+              <button class="btn btn-secondary btn-sm" id="btn-add-source-system" type="button">新增系统</button>
+            </div>
+            <div class="source-feedback" id="source-system-feedback" aria-live="polite"></div>
+            <div class="source-system-list" id="source-system-list">
+              <p class="muted">尚未加载业务系统</p>
+            </div>
+          </div>
+
+          <div class="card source-list-card">
+            <div class="card-head">
+              <div>
+                <h2 id="source-list-title">数据源</h2>
+                <p class="muted" id="source-list-description">请先选择业务系统</p>
+              </div>
+              <div class="source-card-actions">
+                <span class="badge" id="source-count">0 个</span>
+                <button class="btn btn-ghost btn-sm" id="btn-refresh-sources" type="button">刷新</button>
+                <button class="btn btn-primary btn-sm" id="btn-add-source" type="button" disabled>新增数据源</button>
+              </div>
+            </div>
+            <div class="source-feedback" id="source-feedback" aria-live="polite"></div>
+            <div class="table-wrap">
+              <table class="table source-table">
+                <thead>
+                  <tr>
+                    <th>数据源</th>
+                    <th>类型</th>
+                    <th>连接信息</th>
+                    <th>数据库 / Schema</th>
+                    <th>连接状态</th>
+                    <th>流水线</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="source-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 视图：映射管理 -->
+      <section class="view" id="view-mapping">
+        <div class="grid-config mapping-grid">
+          <div class="card">
+            <div class="card-head"><h2>系统标准映射</h2></div>
+            <p class="muted">对应「用户填写系统标准映射.txt」，用于校验别名并解析任务名。</p>
+            <textarea id="mapping-system" class="task-textarea" spellcheck="false"></textarea>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>任务脚本映射</h2></div>
+            <p class="muted">对应「job_py_script_mapping.txt」，配置测试与生产初始化脚本。</p>
+            <textarea id="mapping-script" class="task-textarea" spellcheck="false"></textarea>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>CLOB 白名单</h2></div>
+            <p class="muted">对应「clob_tables.txt」，每行格式为“系统.Schema.表名”，例如 bpm.GROUPHR.techcrm_chances。</p>
+            <textarea id="mapping-clob" class="task-textarea" spellcheck="false" placeholder="系统.Schema.表名"></textarea>
+          </div>
+        </div>
+        <div class="card">
+          <div class="row-actions">
+            <span class="muted">已加载现有资源文件内容；保存时同时保存系统映射、脚本映射和 CLOB 白名单。</span>
+            <span class="spacer"></span>
+            <button class="btn btn-secondary" id="btn-save-mapping">保存映射</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- 任务及运行记录详情抽屉 -->
+  <div class="drawer-backdrop" id="drawer-backdrop"></div>
+  <aside class="drawer" id="drawer">
+    <div class="drawer-head">
+      <h2 id="drawer-title">任务详情</h2>
+      <button class="btn btn-ghost btn-sm" id="drawer-close">关闭</button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
+
+  <script src="app.js"></script>
+</body>
+</html>
+
+

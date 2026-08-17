@@ -1,0 +1,33 @@
+# Python 缓存和编译产物
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Python 虚拟环境
+.venv/
+venv/
+env/
+ENV/
+
+# 本地运行时数据和历史日志
+.runtime/
+
+# 编辑器和本地工具配置
+.ropeproject/
+.idea/
+.vscode/
+
+# 本地环境变量和敏感配置
+.env
+.env.*
+!.env.example
+
+# 操作系统生成的文件
+.DS_Store
+Thumbs.db
+
+# Windows 保留设备名文件，避免无法正常跨平台处理
+/nul
