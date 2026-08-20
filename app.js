@@ -32,6 +32,8 @@
     pollTimer: null,
     // 避免重复弹出同一次运行的完成提示。
     completedRunId: null,
+    // 记录当前页面刚提交的运行，防止终态轮询把已提交任务重新填回输入框。
+    submittedRunId: null,
     // 目录筛选与已选表分开保存，切换筛选条件时不清空已选表。
     catalog: {
       systems: [],
@@ -57,12 +59,60 @@
       validatingIds: [],
       feedback: null,
       error: null
+    },
+    // SeaTunnel 物理任务管理：状态、延迟与只读配置查看。
+    seatunnel: {
+      jobs: [],
+      nodes: [],
+      nodeSummary: {},
+      nodesCheckedAt: null,
+      nodeError: null,
+      loading: false,
+      loaded: false,
+      pendingActions: [],
+      pollTimer: null,
+      polling: false,
+      pollDeadline: 0,
+      // 记录每个任务最近一次启停操作的日志，供「查看日志」按钮回看。
+      actionLogs: {},
+      // 实时日志轮询定时器。
+      operationPollTimer: null,
+      // 当前日志弹窗正在查看的操作 ID，用于轮询时更新可见内容。
+      viewingOperationId: null
+    },
+    // 数据重跑：直接操作选定环境中的 StarRocks ODS 表。
+    rerun: {
+      environments: [],
+      selectedEnvironments: ['test', 'prod'],
+      available: false,
+      loading: false,
+      status: '等待连接',
+      items: [],
+      errors: [],
+      searching: false,
+      loaded: false,
+      running: false,
+      operationId: null,
+      operationStatus: null,
+      operationPollTimer: null,
+      viewingOperationId: null,
+      completed: 0,
+      total: 0,
+      history: [],
+      historyLoading: false,
+      historyQuery: '',
+      // key -> { environment, environmentLabel, table, oriExists }
+      selected: {}
     }
   };
 
   // ============ 常量 ============
   var API_BASE = '/api';
   var POLL_INTERVAL_MS = 1200;
+  // SeaTunnel 任务启停后自动刷新列表，跟踪远程引擎状态变化。
+  // 每次刷新会读取状态库并 SSH 查询引擎，间隔不宜过短。
+  var SEATUNNEL_POLL_INTERVAL_MS = 5000;
+  var SEATUNNEL_POLL_MAX_MS = 180000;
 
   // 页面展示阶段，与 run_pipeline.py 的阶段保持一致。
   var STAGES = [
@@ -342,6 +392,83 @@
 
     fetchPipelineHistoryDetail: function (runId) {
       return requestJson(API_BASE + '/pipeline/history/' + encodeURIComponent(runId));
+    },
+
+    fetchSeatunnelJobs: function () {
+      return requestJson(API_BASE + '/seatunnel/jobs');
+    },
+
+    fetchSeatunnelNodes: function () {
+      return requestJson(API_BASE + '/seatunnel/nodes');
+    },
+
+    fetchSeatunnelConfig: function (name) {
+      return requestJson(API_BASE + '/seatunnel/jobs/' + encodeURIComponent(name) + '/config');
+    },
+
+    startSeatunnelJob: function (name) {
+      return requestJson(API_BASE + '/seatunnel/jobs/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, confirmed: true })
+      });
+    },
+
+    stopSeatunnelJob: function (name) {
+      return requestJson(API_BASE + '/seatunnel/jobs/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, confirmed: true })
+      });
+    },
+
+    restartSeatunnelJob: function (name) {
+      return requestJson(API_BASE + '/seatunnel/jobs/restart', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, confirmed: true })
+      });
+    },
+
+    fetchSeatunnelOperationLog: function (operationId) {
+      return requestJson(API_BASE + '/seatunnel/logs/' + encodeURIComponent(operationId));
+    },
+
+    fetchRerunEnvironments: function () {
+      return requestJson(API_BASE + '/rerun/environments');
+    },
+
+    searchRerunTables: function (environment, query) {
+      return requestJson(API_BASE + '/rerun/tables', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ environment: environment, query: query, limit: 300 })
+      });
+    },
+
+    runRerun: function (environments, tables, productionConfirmed) {
+      return requestJson(API_BASE + '/rerun/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          environments: environments,
+          confirmed: true,
+          productionConfirmed: productionConfirmed === true,
+          tables: tables
+        })
+      });
+    },
+
+    fetchRerunStatus: function (operationId) {
+      return requestJson(API_BASE + '/rerun/status/' + encodeURIComponent(operationId));
+    },
+
+    fetchRerunHistory: function () {
+      return requestJson(API_BASE + '/rerun/history');
+    },
+
+    fetchRerunHistoryDetail: function (operationId) {
+      return requestJson(API_BASE + '/rerun/history/' + encodeURIComponent(operationId));
     }
   };
 
@@ -1096,7 +1223,12 @@
 
   function stageClass(status) {
     var text = String(status || '');
-    if (text.indexOf('失败') !== -1 || text.indexOf('中断') !== -1 || text.indexOf('崩溃') !== -1) {
+    if (
+      text.indexOf('失败') !== -1 ||
+      text.indexOf('中断') !== -1 ||
+      text.indexOf('终止') !== -1 ||
+      text.indexOf('崩溃') !== -1
+    ) {
       return 'danger';
     }
     if (text.indexOf('进行中') !== -1 || text.indexOf('停止中') !== -1) {
@@ -1110,7 +1242,7 @@
     ) {
       return 'ok';
     }
-    if (text.indexOf('跳过') !== -1 || text === '-') {
+    if (text.indexOf('跳过') !== -1) {
       return 'warn';
     }
     return '';
@@ -1127,6 +1259,7 @@
     if (
       text.indexOf('中断') !== -1 ||
       text.indexOf('失败') !== -1 ||
+      text.indexOf('终止') !== -1 ||
       text.indexOf('手动停止') !== -1
     ) {
       return 'danger';
@@ -1141,6 +1274,7 @@
     var text = String(status || '');
     return text.indexOf('失败') !== -1 ||
       text.indexOf('中断') !== -1 ||
+      text.indexOf('终止') !== -1 ||
       text.indexOf('崩溃') !== -1;
   }
 
@@ -1204,6 +1338,7 @@
       } else if (
         finalStatus.indexOf('中断') !== -1 ||
         finalStatus.indexOf('失败') !== -1 ||
+        finalStatus.indexOf('终止') !== -1 ||
         finalStatus.indexOf('跳过') !== -1 ||
         finalStatus.indexOf('手动停止') !== -1
       ) {
@@ -1241,8 +1376,12 @@
     };
     $('#log-meta').textContent = statusText[payload.status] || payload.status;
 
-    // 流水线会自动清理成功记录或回写失败记录，因此结束后以正式 resource.text 为准。
-    if (!state.running && payload.resourceText !== undefined) {
+    // 页面刚提交的任务始终保持清空；其他运行仍以正式 resource.text 为准。
+    // 这避免快速失败时轮询将已提交任务重新填回，造成“没有清空”的错觉。
+    var isCurrentSubmission = Boolean(
+      payload.runId && state.submittedRunId === payload.runId
+    );
+    if (!state.running && payload.resourceText !== undefined && !isCurrentSubmission) {
       state.tasks = String(payload.resourceText)
         .split(/\r?\n/)
         .map(parseTaskLine)
@@ -1341,6 +1480,14 @@
     mapping: {
       title: '映射管理',
       subtitle: '维护正式系统映射、任务脚本映射与 CLOB 白名单'
+    },
+    seatunnel: {
+      title: 'SeaTunnel 任务',
+      subtitle: '管理正式 SeaTunnel 引擎任务的启动、停止、重启与延迟监控'
+    },
+    rerun: {
+      title: '数据重跑',
+      subtitle: '直接从 ORI 重新灌数到测试或生产 StarRocks ODS 表'
     }
   };
 
@@ -1364,6 +1511,23 @@
     if (view === 'sources' && !state.sourceManagement.loaded && !state.sourceManagement.loading) {
       loadSourceManagement().catch(function () {
         // 管理视图内已显示加载错误，保留页面供用户刷新重试。
+      });
+    }
+    if (view === 'seatunnel') {
+      if (!state.seatunnel.loading) {
+        loadSeatunnel(false).then(function () {
+          startSeatunnelPolling();
+        }).catch(function () {
+          // 列表页已显示错误提示，保留页面供用户刷新重试。
+        });
+      }
+    } else {
+      // 离开 SeaTunnel 视图时停止自动刷新，避免后台空转请求。
+      stopSeatunnelPolling();
+    }
+    if (view === 'rerun' && !state.rerun.loaded && !state.rerun.loading) {
+      loadRerun().catch(function () {
+        // 视图内已显示加载错误，保留页面供用户刷新重试。
       });
     }
   }
@@ -1437,6 +1601,7 @@
 
     api.runPipeline(taskText).then(function (payload) {
       state.runId = payload.runId;
+      state.submittedRunId = payload.runId;
       startPolling();
       return pollPipelineStatus(false);
     }).catch(function (error) {
@@ -1508,11 +1673,787 @@
     state.drawerReturnFocus = null;
   }
 
+  // ============ SeaTunnel 任务管理 ============
+  function seatunnelStatusInfo(status) {
+    var value = String(status || 'NOT_RUNNING').toUpperCase();
+    var statusMap = {
+      'RUNNING': { label: '运行中', className: 'running' },
+      'INITIALIZING': { label: '初始化中', className: 'running' },
+      'RECONCILING': { label: '协调中', className: 'running' },
+      'DOING_SAVEPOINT': { label: '保存点制作中', className: 'warn' },
+      'SUSPENDING': { label: '挂起中', className: 'warn' },
+      'FINISHED': { label: '已完成', className: 'ok' },
+      'SAVEPOINT_DONE': { label: '已停止', className: 'ok' },
+      'FAILED': { label: '失败', className: 'danger' },
+      'FAILING': { label: '失败中', className: 'danger' },
+      'CANCELLING': { label: '取消中', className: 'danger' },
+      'CANCELLED': { label: '已取消', className: 'danger' },
+      'SUSPENDED': { label: '已挂起', className: 'danger' },
+      'NOT_RUNNING': { label: '未运行', className: '' },
+      'UNKNOWN': { label: '未知', className: '' }
+    };
+    return statusMap[value] || { label: value || '未知', className: '' };
+  }
+
+  // 判断任务是否处于“运行中”状态，用于置灰启动按钮。与后端 start_job 的
+  // SEATUNNEL_ACTIVE_STATUSES 保持一致。
+  function isSeatunnelActive(status) {
+    var activeStatuses = [
+      'RUNNING',
+      'INITIALIZING',
+      'RECONCILING',
+      'DOING_SAVEPOINT',
+      'SUSPENDING'
+    ];
+    return activeStatuses.indexOf(String(status || '').toUpperCase()) !== -1;
+  }
+
+  // 判断任务是否处于“正在切换/进行中”的中间态，用于展示旋转齿轮。
+  function isSeatunnelTransitioning(status) {
+    var value = String(status || '').toUpperCase();
+    return ['INITIALIZING', 'RECONCILING', 'DOING_SAVEPOINT', 'SUSPENDING'].indexOf(value) !== -1;
+  }
+
+  // 引擎日志中的 delayTime 单位是毫秒，这里先转换为秒再格式化。
+  function delayMsToSeconds(delayMs) {
+    if (delayMs == null || isNaN(delayMs)) return null;
+    var seconds = Math.floor(Number(delayMs) / 1000);
+    return seconds < 0 ? null : seconds;
+  }
+
+  function formatDelay(delayMs) {
+    var seconds = delayMsToSeconds(delayMs);
+    if (seconds == null) return '-';
+    if (seconds < 60) return seconds + ' 秒';
+    if (seconds < 3600) return Math.floor(seconds / 60) + ' 分 ' + (seconds % 60) + ' 秒';
+    if (seconds < 86400) {
+      return Math.floor(seconds / 3600) + ' 小时 ' + Math.floor((seconds % 3600) / 60) + ' 分';
+    }
+    return Math.floor(seconds / 86400) + ' 天 ' + Math.floor((seconds % 86400) / 3600) + ' 小时';
+  }
+
+  function formatDelayShort(delayMs) {
+    var seconds = delayMsToSeconds(delayMs);
+    if (seconds == null) return '-';
+    if (seconds < 60) return seconds + ' 秒';
+    if (seconds < 3600) return Math.floor(seconds / 60) + ' 分';
+    if (seconds < 86400) return (seconds / 3600).toFixed(1) + ' 时';
+    return (seconds / 86400).toFixed(1) + ' 天';
+  }
+
+  function formatCount(value) {
+    if (value == null || isNaN(value)) return '-';
+    var num = Number(value);
+    if (num >= 100000000) return (num / 100000000).toFixed(2) + ' 亿';
+    if (num >= 10000) return (num / 10000).toFixed(2) + ' 万';
+    return String(num);
+  }
+
+  function renderSeatunnelNodes() {
+    var management = state.seatunnel;
+    var body = $('#seatunnel-node-body');
+    if (!body) return;
+    if (management.loading && !management.nodes.length) {
+      body.innerHTML = '<tr><td colspan="7" class="muted seatunnel-node-empty">正在探测集群节点…</td></tr>';
+    } else if (!management.nodes.length) {
+      body.innerHTML = '<tr><td colspan="7" class="muted seatunnel-node-empty">' +
+        escapeHtml(management.nodeError || '暂无集群节点') + '</td></tr>';
+    } else {
+      body.innerHTML = management.nodes.map(function (node) {
+        var online = node.status === 'ONLINE';
+        var degraded = node.status === 'DEGRADED';
+        var statusClass = online ? 'ok' : (degraded ? 'warn' : 'danger');
+        var statusLabel = online ? '在线' : (degraded ? '异常' : '离线');
+        var safeLabel = node.clusterSafe === true ? '安全' : (node.clusterSafe === false ? '不安全' : '-');
+        return '<tr>' +
+          '<td><span class="job-name">' + escapeHtml((node.host || '-') + ':' + (node.port || '-')) + '</span>' +
+            (node.localMember ? ' <span class="pill">入口节点</span>' : '') +
+            (node.error ? '<small class="seatunnel-node-error" title="' + escapeHtml(node.error) + '">探测失败</small>' : '') + '</td>' +
+          '<td>' + escapeHtml(node.role || '-') + '</td>' +
+          '<td><span class="pill ' + statusClass + '">' + statusLabel + '</span></td>' +
+          '<td>' + escapeHtml(node.nodeState || '-') + '</td>' +
+          '<td>' + escapeHtml(node.clusterState || '-') + ' / ' + escapeHtml(safeLabel) + '</td>' +
+          '<td>' + escapeHtml(node.version || '-') + '</td>' +
+          '<td>' + escapeHtml(node.responseMs == null ? '-' : node.responseMs + ' ms') + '</td>' +
+          '</tr>';
+      }).join('');
+    }
+    var summary = management.nodeSummary || {};
+    $('#st-node-total').textContent = summary.total == null ? '-' : summary.total;
+    $('#st-node-online').textContent = summary.online == null ? '-' : summary.online;
+    $('#st-node-data').textContent = summary.dataMembers == null ? '-' : summary.dataMembers;
+    $('#st-node-lite').textContent = summary.liteMembers == null ? '-' : summary.liteMembers;
+    $('#seatunnel-node-feedback').textContent = management.nodeError
+      ? '节点读取失败'
+      : ((summary.online == null ? 0 : summary.online) + '/' + (summary.total == null ? 0 : summary.total) +
+        ' 在线 · 连接 ' + (summary.connectionCount == null ? '-' : summary.connectionCount) +
+        ' · ' + formatDateTime(management.nodesCheckedAt));
+  }
+
+  function renderSeatunnel() {
+    var management = state.seatunnel;
+    var body = $('#seatunnel-body');
+    if (!body) return;
+
+    if (management.loading && !management.jobs.length) {
+      body.innerHTML = '<tr><td colspan="7" class="muted" style="text-align:center;padding:24px;">正在读取 SeaTunnel 任务…</td></tr>';
+    } else if (!management.jobs.length) {
+      body.innerHTML = '<tr><td colspan="7" class="muted" style="text-align:center;padding:24px;">暂无 SeaTunnel 任务</td></tr>';
+    } else {
+      body.innerHTML = management.jobs.map(function (job) {
+        var status = seatunnelStatusInfo(job.status);
+        var pending = management.pendingActions.indexOf(job.name) !== -1;
+        var transitioning = isSeatunnelTransitioning(job.status);
+        var disabled = pending ? ' disabled' : '';
+        var startDisabled = pending || isSeatunnelActive(job.status) ? ' disabled' : '';
+        var logDisabled = management.actionLogs[job.name] ? '' : ' disabled';
+
+        var statusCell = ((pending || transitioning)
+          ? '<span class="gear-spin" aria-hidden="true">⚙</span>'
+          : '') +
+          '<span class="pill ' + status.className + '" title="' + escapeHtml(job.status || '') + '">' +
+          escapeHtml(status.label) + '</span>';
+
+        var actionsCell = pending
+          ? '<div class="seatunnel-actions"><span class="gear-spin" aria-hidden="true">⚙</span>' +
+            '<span class="muted">操作中…</span>' +
+            '<button class="btn btn-ghost btn-sm" type="button" data-st-action="log" data-st-name="' +
+              escapeHtml(job.name) + '"' + logDisabled + '>查看日志</button></div>'
+          : '<div class="seatunnel-actions">' +
+              '<button class="btn btn-secondary btn-sm" type="button" data-st-action="start" data-st-name="' +
+                escapeHtml(job.name) + '"' + startDisabled + '>启动</button>' +
+              '<button class="btn btn-ghost btn-sm" type="button" data-st-action="stop" data-st-name="' +
+                escapeHtml(job.name) + '"' + disabled + '>停止</button>' +
+              '<button class="btn btn-ghost btn-sm" type="button" data-st-action="restart" data-st-name="' +
+                escapeHtml(job.name) + '"' + disabled + '>重启</button>' +
+              '<button class="btn btn-ghost btn-sm" type="button" data-st-action="config" data-st-name="' +
+                escapeHtml(job.name) + '">查看配置</button>' +
+              '<button class="btn btn-ghost btn-sm" type="button" data-st-action="log" data-st-name="' +
+                escapeHtml(job.name) + '"' + logDisabled + '>查看日志</button>' +
+            '</div>';
+
+        return '<tr>' +
+          '<td><span class="job-name" title="' + escapeHtml(job.configFile || job.name) + '">' +
+            escapeHtml(job.name) + '</span></td>' +
+          '<td>' + escapeHtml(job.mode || '-') + '</td>' +
+          '<td>' + statusCell + '</td>' +
+          '<td><span class="delay-cell">' + escapeHtml(formatDelay(job.delayMs)) + '</span></td>' +
+          '<td>' + escapeHtml(formatCount(job.sourceReceivedCount)) + '</td>' +
+          '<td>' + escapeHtml(formatCount(job.sinkWriteCount)) + '</td>' +
+          '<td>' + actionsCell + '</td>' +
+        '</tr>';
+      }).join('');
+    }
+
+    var total = management.jobs.length;
+    var runningCount = management.jobs.filter(function (job) {
+      return seatunnelStatusInfo(job.status).className === 'running';
+    }).length;
+    var failedCount = management.jobs.filter(function (job) {
+      return seatunnelStatusInfo(job.status).className === 'danger';
+    }).length;
+    var delays = management.jobs.map(function (job) {
+      return Number(job.delayMs);
+    }).filter(function (value) {
+      return !isNaN(value) && value >= 0;
+    });
+    var maxDelay = delays.length ? Math.max.apply(null, delays) : null;
+
+    $('#st-stat-total').textContent = total;
+    $('#st-stat-running').textContent = runningCount;
+    $('#st-stat-failed').textContent = failedCount;
+    $('#st-stat-delay').textContent = maxDelay == null ? '-' : formatDelayShort(maxDelay);
+    $('#seatunnel-feedback').textContent = management.loading
+      ? '刷新中…'
+      : (management.polling ? '自动刷新中…' : (total ? total + ' 个任务' : '无任务'));
+    $('#btn-seatunnel-refresh').textContent = management.loading ? '刷新中…' : '刷新';
+    $('#btn-seatunnel-refresh').disabled = Boolean(management.loading);
+    renderSeatunnelNodes();
+  }
+
+  function loadSeatunnel(showError) {
+    var management = state.seatunnel;
+    management.loading = true;
+    renderSeatunnel();
+    var jobsRequest = api.fetchSeatunnelJobs();
+    var nodesRequest = api.fetchSeatunnelNodes().then(function (payload) {
+      management.nodes = Array.isArray(payload.nodes) ? payload.nodes : [];
+      management.nodeSummary = payload.summary || {};
+      management.nodesCheckedAt = payload.checkedAt || null;
+      management.nodeError = null;
+    }).catch(function (error) {
+      management.nodeError = error.message;
+      if (showError) notify('读取 SeaTunnel 节点失败：' + error.message, 'error');
+    });
+    return Promise.all([jobsRequest, nodesRequest]).then(function (responses) {
+      var payload = responses[0];
+      management.jobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+      management.loaded = true;
+      management.loading = false;
+      renderSeatunnel();
+      return management.jobs;
+    }).catch(function (error) {
+      management.loading = false;
+      renderSeatunnel();
+      if (showError) {
+        notify('读取 SeaTunnel 任务失败：' + error.message, 'error');
+      }
+      throw error;
+    });
+  }
+
+  function startSeatunnelPolling() {
+    var management = state.seatunnel;
+    if (management.pollTimer) return;
+
+    management.polling = true;
+    management.pollDeadline = Date.now() + SEATUNNEL_POLL_MAX_MS;
+
+    var refresh = function () {
+      if (Date.now() >= management.pollDeadline) {
+        stopSeatunnelPolling();
+        return;
+      }
+      Promise.all([api.fetchSeatunnelJobs(), api.fetchSeatunnelNodes()]).then(function (responses) {
+        var jobsPayload = responses[0];
+        var nodesPayload = responses[1];
+        management.jobs = Array.isArray(jobsPayload.jobs) ? jobsPayload.jobs : [];
+        management.nodes = Array.isArray(nodesPayload.nodes) ? nodesPayload.nodes : [];
+        management.nodeSummary = nodesPayload.summary || {};
+        management.nodesCheckedAt = nodesPayload.checkedAt || null;
+        management.nodeError = null;
+        management.loaded = true;
+        renderSeatunnel();
+      }).catch(function () {
+        // 单次刷新失败不中断后续轮询，保留现有数据供用户手动刷新。
+      });
+    };
+
+    // 立即刷新一次，再进入定时轮询。
+    refresh();
+    management.pollTimer = window.setInterval(refresh, SEATUNNEL_POLL_INTERVAL_MS);
+    renderSeatunnel();
+  }
+
+  function stopSeatunnelPolling() {
+    var management = state.seatunnel;
+    if (!management.pollTimer) return;
+    window.clearInterval(management.pollTimer);
+    management.pollTimer = null;
+    management.polling = false;
+    renderSeatunnel();
+  }
+
+  function openSeatunnelConfig(name) {
+    $('#drawer').classList.remove('is-history');
+    $('#drawer-title').textContent = 'SeaTunnel 配置 / ' + name;
+    $('#drawer-body').innerHTML = '<p class="muted">正在加载配置文件…</p>';
+    showDrawer();
+
+    api.fetchSeatunnelConfig(name).then(function (payload) {
+      $('#drawer-title').textContent = 'SeaTunnel 配置 / ' + payload.configFile;
+      $('#drawer-body').innerHTML =
+        '<p class="muted config-note">以下为当前任务的运行配置，只读、不可编辑。</p>' +
+        '<pre class="config-viewer">' + escapeHtml(payload.content || '') + '</pre>';
+    }).catch(function (error) {
+      $('#drawer-body').innerHTML = '<p class="muted">加载配置失败：' +
+        escapeHtml(error.message) + '</p>';
+    });
+  }
+
+  function showSeatunnelLogModal() {
+    $('#log-modal').classList.remove('is-fullscreen');
+    $('#log-modal-fullscreen').textContent = '全屏';
+    $('#log-modal').classList.add('is-open');
+    $('#log-modal-backdrop').classList.add('is-open');
+    $('#log-modal').setAttribute('aria-hidden', 'false');
+    window.setTimeout(function () {
+      $('#log-modal-close').focus();
+    }, 0);
+  }
+
+  function closeSeatunnelLogModal() {
+    $('#log-modal').classList.remove('is-open', 'is-fullscreen');
+    $('#log-modal-backdrop').classList.remove('is-open');
+    $('#log-modal').setAttribute('aria-hidden', 'true');
+    $('#log-modal-fullscreen').textContent = '全屏';
+    state.seatunnel.viewingOperationId = null;
+    state.rerun.viewingOperationId = null;
+  }
+
+  function toggleSeatunnelLogFullscreen() {
+    var fullscreen = $('#log-modal').classList.toggle('is-fullscreen');
+    $('#log-modal-fullscreen').textContent = fullscreen ? '退出全屏' : '全屏';
+  }
+
+  function openSeatunnelActionLog(name, label, output) {
+    $('#log-modal-title').textContent = '操作日志 / ' + label + ' ' + name;
+    $('#log-modal-status').textContent = '已完成';
+    $('#log-modal-content').textContent = output || '（无日志输出）';
+    showSeatunnelLogModal();
+  }
+
+  function stopSeatunnelOperationPolling() {
+    var management = state.seatunnel;
+    if (management.operationPollTimer) {
+      window.clearInterval(management.operationPollTimer);
+      management.operationPollTimer = null;
+    }
+  }
+
+  function startSeatunnelOperationPolling(name, operationId) {
+    var management = state.seatunnel;
+    stopSeatunnelOperationPolling();
+
+    var timer = window.setInterval(function () {
+      api.fetchSeatunnelOperationLog(operationId).then(function (op) {
+        // 只有用户正在查看该操作时才更新可见弹窗，避免自动弹出。
+        if (state.seatunnel.viewingOperationId === operationId) {
+          var content = $('#log-modal-content');
+          content.textContent = op.log || '（暂无日志输出）';
+          content.scrollTop = content.scrollHeight;
+          $('#log-modal-status').textContent = op.status === 'running'
+            ? '实时执行中'
+            : (op.status === 'succeeded' ? '已完成' : '失败');
+        }
+
+        if (op.status !== 'running') {
+          window.clearInterval(timer);
+          if (management.operationPollTimer === timer) {
+            management.operationPollTimer = null;
+          }
+
+          if (management.actionLogs[name]) {
+            management.actionLogs[name].output = op.log;
+            management.actionLogs[name].error = op.error;
+          }
+          management.pendingActions = management.pendingActions.filter(function (item) {
+            return item !== name;
+          });
+          renderSeatunnel();
+
+          if (op.status === 'succeeded') {
+            notify('任务操作完成。', 'success');
+          } else {
+            notify('任务操作失败：' + (op.error || '未知错误'), 'error', 7000);
+          }
+          // 操作结束后刷新任务列表，跟踪远程引擎状态变化。
+          startSeatunnelPolling();
+        }
+      }).catch(function () {
+        // 单次读取失败不中断轮询。
+      });
+    }, 1000);
+
+    management.operationPollTimer = timer;
+  }
+
+  function openSeatunnelStoredLog(name) {
+    var entry = state.seatunnel.actionLogs[name];
+    if (!entry) return;
+    if (!entry.operationId) {
+      openSeatunnelActionLog(name, entry.label, entry.output);
+      return;
+    }
+    api.fetchSeatunnelOperationLog(entry.operationId).then(function (op) {
+      if (op.status === 'running') {
+        // 标记正在查看的操作并打开实时视图；后台轮询会持续更新弹窗。
+        state.seatunnel.viewingOperationId = entry.operationId;
+        $('#log-modal-title').textContent = '操作日志 / ' + name;
+        $('#log-modal-status').textContent = '实时执行中';
+        $('#log-modal-content').textContent = op.log || '正在执行，等待日志输出…';
+        showSeatunnelLogModal();
+        // 若后台轮询未运行（例如页面刷新后），则启动。
+        if (!state.seatunnel.operationPollTimer) {
+          startSeatunnelOperationPolling(name, entry.operationId);
+        }
+      } else {
+        openSeatunnelActionLog(name, entry.label, op.log || entry.output);
+      }
+    }).catch(function () {
+      openSeatunnelActionLog(name, entry.label, entry.output);
+    });
+  }
+
+  function seatunnelAction(name, action) {
+    var management = state.seatunnel;
+    if (management.pendingActions.indexOf(name) !== -1) return;
+
+    var actionLabels = { start: '启动', stop: '停止', restart: '重启' };
+    var label = actionLabels[action] || action;
+    var confirmed = window.confirm('确认' + label + ' SeaTunnel 任务「' + name + '」吗？\n\n此操作会直接作用于生产 SeaTunnel 引擎。');
+    if (!confirmed) return;
+
+    management.pendingActions.push(name);
+    renderSeatunnel();
+
+    var request;
+    if (action === 'start') request = api.startSeatunnelJob(name);
+    else if (action === 'stop') request = api.stopSeatunnelJob(name);
+    else request = api.restartSeatunnelJob(name);
+
+    request.then(function (payload) {
+      var operationId = payload && payload.operationId;
+      management.actionLogs[name] = {
+        operationId: operationId,
+        label: label,
+        output: '',
+        error: null
+      };
+      notify((payload && payload.message) || (label + '任务已提交'), 'success');
+      // 重新渲染，让操作中的「查看日志」按钮变为可用。
+      renderSeatunnel();
+      // 开始实时拉取日志。
+      startSeatunnelOperationPolling(name, operationId);
+    }).catch(function (error) {
+      notify(label + '任务提交失败：' + error.message, 'error', 7000);
+      management.pendingActions = management.pendingActions.filter(function (item) {
+        return item !== name;
+      });
+      renderSeatunnel();
+    });
+  }
+
+  // ============ 数据重跑 ============
+  function rerunTableKey(item) {
+    return [item.environment, item.table].map(function (value) {
+      return String(value || '').toLowerCase();
+    }).join('\u0001');
+  }
+
+  function getRerunEnvironment(environmentId) {
+    return state.rerun.environments.find(function (environment) {
+      return environment.id === environmentId;
+    }) || null;
+  }
+
+  function updateRerunControls() {
+    var rerun = state.rerun;
+    var unavailable = rerun.running || !rerun.available || rerun.loading || !rerun.selectedEnvironments.length;
+    var selectableItems = rerun.items.filter(function (item) { return item.oriExists; });
+    $('#rerun-query').disabled = unavailable || rerun.searching;
+    $('#btn-rerun-search').disabled = unavailable || rerun.searching || !$('#rerun-query').value.trim();
+    $('#rerun-select-all').disabled = unavailable || !selectableItems.length;
+    $('#btn-rerun-run').disabled = unavailable || !Object.keys(rerun.selected).length;
+
+    $('#btn-rerun-log').hidden = !rerun.operationId;
+  }
+
+  function renderRerun() {
+    var rerun = state.rerun;
+    var statusText = rerun.loading ? '环境读取中' : (rerun.available ? 'StarRocks 已连接' : rerun.status);
+    if (rerun.running) statusText = '执行中 ' + rerun.completed + '/' + rerun.total;
+    else if (rerun.operationStatus === 'succeeded') statusText = '最近执行成功';
+    else if (rerun.operationStatus === 'failed') statusText = '最近执行有失败';
+    $('#rerun-status').textContent = statusText;
+
+    if (rerun.loading) {
+      $('#rerun-environments').innerHTML = '<p class="muted">正在读取环境…</p>';
+    } else if (!rerun.available) {
+      $('#rerun-environments').innerHTML = '<p class="muted">' + escapeHtml(rerun.status) + '</p>';
+    } else {
+      $('#rerun-environments').innerHTML = rerun.environments.map(function (environment) {
+        var warning = environment.production ? '<small>直接操作生产 StarRocks</small>' : '<small>建议先在测试环境验证</small>';
+        return '<label class="selector-option' + (environment.production ? ' is-production' : '') + '">' +
+          '<input type="checkbox" name="rerun-environment" value="' + escapeHtml(environment.id) + '"' +
+            (rerun.selectedEnvironments.indexOf(environment.id) !== -1 ? ' checked' : '') + (rerun.running ? ' disabled' : '') + ' />' +
+          '<span class="selector-option-text">' + escapeHtml(environment.label) + warning + '</span>' +
+          '</label>';
+      }).join('');
+    }
+
+    var feedback = [];
+
+    if (rerun.errors.length) {
+      feedback.push('<div class="feedback-error">' + rerun.errors.map(escapeHtml).join('；') + '</div>');
+    }
+    $('#rerun-feedback').innerHTML = feedback.join('');
+
+    if (rerun.searching) {
+      $('#rerun-result-body').innerHTML = '<tr><td colspan="5" class="muted rerun-empty">正在搜索 StarRocks 表…</td></tr>';
+    } else if (!rerun.items.length) {
+      $('#rerun-result-body').innerHTML = '<tr><td colspan="5" class="muted rerun-empty">输入 ODS 表名后搜索</td></tr>';
+    } else {
+      var selectableItems = rerun.items.filter(function (item) { return item.oriExists; });
+      var allChecked = selectableItems.length && selectableItems.every(function (item) {
+        return Boolean(rerun.selected[rerunTableKey(item)]);
+      });
+      $('#rerun-select-all').checked = Boolean(allChecked);
+      $('#rerun-result-body').innerHTML = rerun.items.map(function (item, index) {
+        var key = rerunTableKey(item);
+        var checked = Boolean(rerun.selected[key]);
+        var sourceState = item.oriExists
+          ? '<span class="status-dot status-success">可灌数</span>'
+          : '<span class="status-dot status-danger">缺少同名表</span>';
+        return '<tr>' +
+          '<td><input type="checkbox" data-rerun-result-index="' + index + '"' +
+            (checked ? ' checked' : '') + (!item.oriExists || rerun.running ? ' disabled' : '') + ' /></td>' +
+          '<td>' + escapeHtml(item.environmentLabel) + '</td>' +
+          '<td><span class="job-name">' + escapeHtml(item.table) + '</span>' +
+            (item.exact ? '' : ' <small class="muted">模糊</small>') + '</td>' +
+          '<td><span class="status-dot status-success">存在</span></td>' +
+          '<td>' + sourceState + '</td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    var keys = Object.keys(rerun.selected);
+    $('#rerun-selected-count').textContent = keys.length + ' 张';
+    $('#rerun-selected-list').innerHTML = keys.map(function (key) {
+      var item = rerun.selected[key];
+      return '<div class="rerun-selected-item">' +
+        '<span class="rerun-item-name">' + escapeHtml(item.environmentLabel) + ' / ods.' + escapeHtml(item.table) + '</span>' +
+        '<button class="btn btn-ghost btn-sm" type="button" data-rerun-remove="' + escapeHtml(key) + '"' +
+          (rerun.running ? ' disabled' : '') + '>移除</button>' +
+        '</div>';
+    }).join('') || '<span class="muted">尚未选择表</span>';
+
+    updateRerunControls();
+  }
+
+  function renderRerunHistory() {
+    var rerun = state.rerun;
+    var query = rerun.historyQuery.trim().toLowerCase();
+    var records = rerun.history.filter(function (record) {
+      if (!query) return true;
+      var tables = (record.tables || []).map(function (item) { return item.table; }).join(' ');
+      var statusLabel = historyStatus(record.status).label;
+      return [record.environmentLabel, record.status, statusLabel, tables].join(' ').toLowerCase().indexOf(query) !== -1;
+    });
+    if (rerun.historyLoading) {
+      $('#rerun-history-body').innerHTML = '<tr><td colspan="7" class="muted rerun-empty">正在读取重跑记录…</td></tr>';
+      return;
+    }
+    $('#rerun-history-body').innerHTML = records.map(function (record) {
+      var status = historyStatus(record.status);
+      var tableNames = (record.tables || []).map(function (item) {
+        return (item.environment === 'prod' ? '生产' : '测试') + '/' + item.table;
+      }).join('、');
+      return '<tr>' +
+        '<td>' + escapeHtml(formatDateTime(record.startedAt)) + '</td>' +
+        '<td>' + escapeHtml(record.environmentLabel || '-') + '</td>' +
+        '<td>' + escapeHtml(record.total || 0) + '</td>' +
+        '<td>' + escapeHtml(record.failedCount || 0) + '</td>' +
+        '<td><span class="history-tables" title="' + escapeHtml(tableNames) + '">' + escapeHtml(tableNames || '-') + '</span></td>' +
+        '<td><span class="pill ' + status.className + '">' + escapeHtml(status.label) + '</span></td>' +
+        '<td><button class="btn btn-ghost btn-sm" type="button" data-rerun-history="' +
+          escapeHtml(record.operationId) + '">查看</button></td>' +
+        '</tr>';
+    }).join('') || '<tr><td colspan="7" class="muted rerun-empty">暂无匹配的重跑记录</td></tr>';
+  }
+
+  function loadRerunHistory(showFeedback) {
+    state.rerun.historyLoading = true;
+    renderRerunHistory();
+    return api.fetchRerunHistory().then(function (payload) {
+      state.rerun.history = Array.isArray(payload.records) ? payload.records : [];
+      state.rerun.historyLoading = false;
+      renderRerunHistory();
+      if (showFeedback) notify('重跑记录已刷新。', 'success');
+    }).catch(function (error) {
+      state.rerun.historyLoading = false;
+      renderRerunHistory();
+      notify('读取重跑记录失败：' + error.message, 'error');
+    });
+  }
+
+  function openRerunHistory(operationId) {
+    api.fetchRerunHistoryDetail(operationId).then(function (operation) {
+      $('#log-modal-title').textContent = '重跑记录 / ' + (operation.environmentLabel || '-');
+      $('#log-modal-status').textContent = historyStatus(operation.status).label;
+      $('#log-modal-content').textContent = operation.log || '（无日志输出）';
+      showSeatunnelLogModal();
+    }).catch(function (error) {
+      notify('读取重跑记录详情失败：' + error.message, 'error');
+    });
+  }
+
+  function loadRerun() {
+    var rerun = state.rerun;
+    rerun.loading = true;
+    rerun.status = '环境读取中';
+    renderRerun();
+    return api.fetchRerunEnvironments().then(function (payload) {
+      rerun.environments = Array.isArray(payload.environments) ? payload.environments : [];
+      rerun.available = rerun.environments.length > 0;
+      rerun.status = rerun.available ? 'StarRocks 已连接' : '未配置 StarRocks 环境';
+      rerun.selectedEnvironments = rerun.selectedEnvironments.filter(function (environmentId) {
+        return rerun.environments.some(function (item) { return item.id === environmentId; });
+      });
+      if (!rerun.selectedEnvironments.length && rerun.environments.length) {
+        rerun.selectedEnvironments = [rerun.environments[0].id];
+      }
+      rerun.loaded = true;
+      rerun.loading = false;
+      renderRerun();
+      loadRerunHistory(false);
+      return rerun.environments;
+    }).catch(function (error) {
+      rerun.loading = false;
+      rerun.available = false;
+      rerun.status = '环境不可用：' + error.message;
+      renderRerun();
+      throw error;
+    });
+  }
+
+  function searchRerunTables() {
+    var rerun = state.rerun;
+    var query = $('#rerun-query').value.trim();
+    if (!query || rerun.running) return;
+    rerun.searching = true;
+    rerun.errors = [];
+    renderRerun();
+
+    Promise.all(rerun.selectedEnvironments.map(function (environmentId) {
+      return api.searchRerunTables(environmentId, query).then(function (payload) {
+        var environment = getRerunEnvironment(environmentId);
+        return (Array.isArray(payload.items) ? payload.items : []).filter(function (item) {
+          return item && item.table && item.odsExists;
+        }).map(function (item) {
+          return Object.assign({}, item, {
+            environment: environmentId,
+            environmentLabel: environment ? environment.label : environmentId
+          });
+        });
+      });
+    })).then(function (groups) {
+      rerun.items = [].concat.apply([], groups);
+      rerun.searching = false;
+      renderRerun();
+    }).catch(function (error) {
+      rerun.searching = false;
+      rerun.errors = ['搜索表失败：' + error.message];
+      renderRerun();
+    });
+  }
+
+  function stopRerunPolling() {
+    if (state.rerun.operationPollTimer) {
+      window.clearInterval(state.rerun.operationPollTimer);
+      state.rerun.operationPollTimer = null;
+    }
+  }
+
+  function applyRerunOperation(operation) {
+    var rerun = state.rerun;
+    rerun.running = operation.status === 'running';
+    rerun.operationStatus = operation.status;
+    rerun.completed = Number(operation.completed || 0);
+    rerun.total = Number(operation.total || 0);
+    if (rerun.viewingOperationId === operation.operationId) {
+      $('#log-modal-status').textContent = operation.status === 'running'
+        ? '实时执行中 ' + rerun.completed + '/' + rerun.total
+        : (operation.status === 'succeeded' ? '已完成' : '失败');
+      $('#log-modal-content').textContent = operation.log || '（暂无日志输出）';
+      $('#log-modal-content').scrollTop = $('#log-modal-content').scrollHeight;
+    }
+    renderRerun();
+  }
+
+  function startRerunPolling(operationId) {
+    stopRerunPolling();
+    var finishedNotified = false;
+    function poll() {
+      api.fetchRerunStatus(operationId).then(function (operation) {
+        applyRerunOperation(operation);
+        if (operation.status !== 'running') {
+          stopRerunPolling();
+          if (!finishedNotified) {
+            finishedNotified = true;
+            notify(
+              operation.status === 'succeeded' ? '数据重跑全部完成。' : '数据重跑完成，但有表执行失败。',
+              operation.status === 'succeeded' ? 'success' : 'error',
+              7000
+            );
+            loadRerunHistory(false);
+          }
+        }
+      }).catch(function () {
+        // 单次读取失败不中断实时日志轮询。
+      });
+    }
+    poll();
+    state.rerun.operationPollTimer = window.setInterval(poll, 1000);
+  }
+
+  function openRerunLog() {
+    var operationId = state.rerun.operationId;
+    if (!operationId) return;
+    api.fetchRerunStatus(operationId).then(function (operation) {
+      state.rerun.viewingOperationId = operationId;
+      $('#log-modal-title').textContent = '数据重跑日志 / ' + operation.environmentLabel;
+      $('#log-modal-status').textContent = operation.status === 'running'
+        ? '实时执行中 ' + operation.completed + '/' + operation.total
+        : (operation.status === 'succeeded' ? '已完成' : '失败');
+      $('#log-modal-content').textContent = operation.log || '正在执行，等待日志输出…';
+      showSeatunnelLogModal();
+      if (operation.status === 'running' && !state.rerun.operationPollTimer) {
+        startRerunPolling(operationId);
+      }
+    }).catch(function (error) {
+      notify('读取数据重跑日志失败：' + error.message, 'error');
+    });
+  }
+
+  function runRerun() {
+    var rerun = state.rerun;
+    var keys = Object.keys(rerun.selected);
+    if (!keys.length || rerun.running) return;
+    var operationEnvironmentIds = [];
+    keys.forEach(function (key) {
+      var environmentId = rerun.selected[key].environment;
+      if (operationEnvironmentIds.indexOf(environmentId) === -1) {
+        operationEnvironmentIds.push(environmentId);
+      }
+    });
+    var environments = operationEnvironmentIds.map(getRerunEnvironment).filter(Boolean);
+    if (!environments.length) return;
+    var confirmed = window.confirm(
+      '确认重跑' + environments.map(function (item) { return item.label; }).join('、') + '的 StarRocks 数据吗？\n\n' +
+      '共 ' + keys.length + ' 张 ODS 表，将执行 INSERT OVERWRITE 从同名 ORI 表重新灌数。\n' +
+      '本操作不会创建、删除或修改表结构。'
+    );
+    if (!confirmed) return;
+
+    // 生产环境不再单独弹出文字确认；执行前的汇总确认仍然保留。
+    var productionConfirmed = environments.some(function (item) { return item.production; });
+
+    var tables = keys.map(function (key) {
+      return {
+        environment: rerun.selected[key].environment,
+        table: rerun.selected[key].table
+      };
+    });
+    rerun.running = true;
+    rerun.completed = 0;
+    rerun.total = tables.length;
+    rerun.errors = [];
+    renderRerun();
+
+    api.runRerun(operationEnvironmentIds, tables, productionConfirmed).then(function (payload) {
+      rerun.operationId = payload.operationId;
+      rerun.operationStatus = 'running';
+      renderRerun();
+      notify('数据重跑已提交，可点击“查看实时日志”。', 'success');
+      loadRerunHistory(false);
+      startRerunPolling(payload.operationId);
+    }).catch(function (error) {
+      rerun.running = false;
+      rerun.errors = ['提交失败：' + error.message];
+      renderRerun();
+      notify('数据重跑提交失败：' + error.message, 'error');
+    });
+  }
+
   // ============ 事件绑定 ============
   function bindEvents() {
-    // 支持使用 Esc 关闭详情抽屉，避免键盘用户必须定位到关闭按钮。
+    // 支持使用 Esc 关闭详情抽屉或日志弹窗，避免键盘用户必须定位到关闭按钮。
     document.addEventListener('keydown', function (event) {
-      if (event.key === 'Escape' && $('#drawer').classList.contains('is-open')) {
+      if (event.key !== 'Escape') return;
+      if ($('#log-modal').classList.contains('is-open')) {
+        closeSeatunnelLogModal();
+      } else if ($('#drawer').classList.contains('is-open')) {
         closeDrawer();
       }
     });
@@ -1823,6 +2764,7 @@
       setRunningUI(true);
       api.runPipeline($('#task-input').value).then(function (payload) {
         state.runId = payload.runId;
+        state.submittedRunId = payload.runId;
         state.completedRunId = null;
         // 启动成功后清空待入湖任务输入框，避免已提交任务残留、被误重复提交。
         state.tasks = [];
@@ -1914,8 +2856,120 @@
       }
     });
 
+    $('#btn-seatunnel-refresh').addEventListener('click', function () {
+      loadSeatunnel(true).catch(function () {
+        // 错误已经在 loadSeatunnel 中提示。
+      });
+    });
+
+    $('#seatunnel-body').addEventListener('click', function (event) {
+      var button = event.target.closest('[data-st-action]');
+      if (!button || button.disabled) return;
+      var action = button.dataset.stAction;
+      var name = button.dataset.stName;
+      if (action === 'config') {
+        openSeatunnelConfig(name);
+      } else if (action === 'log') {
+        openSeatunnelStoredLog(name);
+      } else {
+        seatunnelAction(name, action);
+      }
+    });
+
+    // ============ 数据重跑 ============
+    $('#rerun-environments').addEventListener('change', function (event) {
+      if (event.target.name !== 'rerun-environment' || state.rerun.running) return;
+      var environmentId = event.target.value;
+      if (event.target.checked) {
+        if (state.rerun.selectedEnvironments.indexOf(environmentId) === -1) {
+          state.rerun.selectedEnvironments.push(environmentId);
+        }
+      } else {
+        state.rerun.selectedEnvironments = state.rerun.selectedEnvironments.filter(function (id) {
+          return id !== environmentId;
+        });
+      }
+      state.rerun.items = [];
+      state.rerun.selected = {};
+      state.rerun.errors = [];
+      renderRerun();
+    });
+
+    $('#rerun-query').addEventListener('input', updateRerunControls);
+
+    $('#rerun-search-form').addEventListener('submit', function (event) {
+      event.preventDefault();
+      searchRerunTables();
+    });
+
+    $('#rerun-result-body').addEventListener('change', function (event) {
+      var checkbox = event.target;
+      if (!checkbox.hasAttribute('data-rerun-result-index')) return;
+      var item = state.rerun.items[Number(checkbox.dataset.rerunResultIndex)];
+      if (!item) return;
+      var key = rerunTableKey(item);
+      if (checkbox.checked && item.oriExists) {
+        state.rerun.selected[key] = {
+          environment: item.environment,
+          environmentLabel: item.environmentLabel,
+          table: item.table,
+          oriExists: true
+        };
+      } else {
+        delete state.rerun.selected[key];
+      }
+      renderRerun();
+    });
+
+    $('#rerun-select-all').addEventListener('change', function (event) {
+      var checked = event.target.checked;
+      state.rerun.items.forEach(function (item) {
+        var key = rerunTableKey(item);
+        if (checked && item.oriExists) {
+          state.rerun.selected[key] = {
+            environment: item.environment,
+            environmentLabel: item.environmentLabel,
+            table: item.table,
+            oriExists: true
+          };
+        } else {
+          delete state.rerun.selected[key];
+        }
+      });
+      renderRerun();
+    });
+
+
+    $('#rerun-selected-list').addEventListener('click', function (event) {
+      var button = event.target.closest('[data-rerun-remove]');
+      if (!button) return;
+      delete state.rerun.selected[button.dataset.rerunRemove];
+      renderRerun();
+    });
+
+
+    $('#btn-rerun-run').addEventListener('click', runRerun);
+    $('#btn-rerun-log').addEventListener('click', openRerunLog);
+    $('#rerun-history-query').addEventListener('input', function (event) {
+      state.rerun.historyQuery = event.target.value;
+      renderRerunHistory();
+    });
+    $('#btn-rerun-history-refresh').addEventListener('click', function () {
+      loadRerunHistory(true);
+    });
+    $('#rerun-history-body').addEventListener('click', function (event) {
+      var button = event.target.closest('[data-rerun-history]');
+      if (button) openRerunHistory(button.dataset.rerunHistory);
+    });
+
     $('#drawer-close').addEventListener('click', closeDrawer);
     $('#drawer-backdrop').addEventListener('click', closeDrawer);
+
+    $('#log-modal-close').addEventListener('click', closeSeatunnelLogModal);
+    $('#log-modal-backdrop').addEventListener('click', closeSeatunnelLogModal);
+    $('#log-modal-fullscreen').addEventListener('click', toggleSeatunnelLogFullscreen);
+    // 点击日志内容可切换全屏。
+    $('#log-modal-content').addEventListener('click', toggleSeatunnelLogFullscreen);
   }
 
   // ============ 初始化 ============
@@ -1925,6 +2979,9 @@
     renderHistory();
     renderCatalog();
     renderSourceManagement();
+    renderSeatunnel();
+    renderRerun();
+    renderRerunHistory();
     switchView('config');
 
     // 先验证后端确实指向正式流水线，再读取正式配置。
@@ -1978,7 +3035,11 @@
     });
   }
 
-  window.addEventListener('beforeunload', stopPolling);
+  window.addEventListener('beforeunload', function () {
+    stopPolling();
+    stopSeatunnelPolling();
+    stopSeatunnelOperationPolling();
+  });
   init();
 })();
 

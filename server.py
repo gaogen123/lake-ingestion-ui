@@ -27,6 +27,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import seatunnel_manager
+import starrocks_rerun
+
 
 # 前端静态文件目录。
 UI_ROOT = Path(__file__).resolve().parent
@@ -1765,6 +1768,68 @@ class LakeConsoleHandler(SimpleHTTPRequestHandler):
             else:
                 self.send_json(record)
             return
+        if path == "/api/rerun/environments":
+            self.send_json(starrocks_rerun.list_environments())
+            return
+        if path == "/api/rerun/history":
+            self.send_json(starrocks_rerun.list_history())
+            return
+        rerun_history_prefix = "/api/rerun/history/"
+        if path.startswith(rerun_history_prefix):
+            operation_id = path[len(rerun_history_prefix):]
+            operation = starrocks_rerun.get_history(operation_id)
+            if operation is None:
+                self.send_json({"error": "数据重跑记录不存在"}, HTTPStatus.NOT_FOUND)
+            else:
+                self.send_json(operation)
+            return
+        rerun_status_prefix = "/api/rerun/status/"
+        if path.startswith(rerun_status_prefix):
+            operation_id = path[len(rerun_status_prefix):]
+            operation = starrocks_rerun.get_operation(operation_id)
+            if operation is None:
+                self.send_json({"error": "数据重跑记录不存在"}, HTTPStatus.NOT_FOUND)
+            else:
+                self.send_json(operation)
+            return
+        if path == "/api/seatunnel/nodes":
+            try:
+                self.send_json(seatunnel_manager.list_nodes())
+            except seatunnel_manager.SeaTunnelError as exc:
+                self.send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+            return
+        if path == "/api/seatunnel/jobs":
+            self.send_json(seatunnel_manager.list_jobs())
+            return
+        seatunnel_logs_prefix = "/api/seatunnel/logs/"
+        if path.startswith(seatunnel_logs_prefix):
+            operation_id = path[len(seatunnel_logs_prefix):]
+            operation = seatunnel_manager.get_operation(operation_id)
+            if operation is None:
+                self.send_json({"error": "操作记录不存在"}, HTTPStatus.NOT_FOUND)
+            else:
+                self.send_json(operation)
+            return
+        seatunnel_jobs_prefix = "/api/seatunnel/jobs/"
+        if path.startswith(seatunnel_jobs_prefix):
+            rest = path[len(seatunnel_jobs_prefix):]
+            if rest.endswith("/config"):
+                name = rest[: -len("/config")]
+                try:
+                    content = seatunnel_manager.read_running_conf(name)
+                    self.send_json(
+                        {
+                            "name": name,
+                            "configFile": f"{name}.conf",
+                            "mode": seatunnel_manager.extract_job_mode(content),
+                            "content": content,
+                        }
+                    )
+                except ValueError as exc:
+                    self.send_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+                except seatunnel_manager.SeaTunnelError as exc:
+                    self.send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+                return
         super().do_GET()
 
     def do_POST(self) -> None:
@@ -1780,6 +1845,12 @@ class LakeConsoleHandler(SimpleHTTPRequestHandler):
                 return
             if path == "/api/catalog/tables":
                 self.handle_catalog_tables(payload)
+                return
+            if path == "/api/rerun/tables":
+                self.handle_rerun_tables(payload)
+                return
+            if path == "/api/rerun/run":
+                self.handle_rerun_run(payload)
                 return
             if path == "/api/source-management/systems":
                 self.handle_create_managed_system(payload)
@@ -1805,7 +1876,20 @@ class LakeConsoleHandler(SimpleHTTPRequestHandler):
             if path == "/api/pipeline/stop":
                 self.handle_stop_pipeline(payload)
                 return
+            if path == "/api/seatunnel/jobs/start":
+                self.handle_seatunnel_start(payload)
+                return
+            if path == "/api/seatunnel/jobs/stop":
+                self.handle_seatunnel_stop(payload)
+                return
+            if path == "/api/seatunnel/jobs/restart":
+                self.handle_seatunnel_restart(payload)
+                return
             self.send_json({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)
+        except seatunnel_manager.SeaTunnelError as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+        except starrocks_rerun.StarRocksRerunError as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.CONFLICT)
         except ValueError as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except RuntimeError as exc:
@@ -2060,6 +2144,20 @@ class LakeConsoleHandler(SimpleHTTPRequestHandler):
             }
         )
 
+    def handle_rerun_tables(self, payload: dict[str, Any]) -> None:
+        """查询测试或生产 StarRocks 中的真实 ODS 表。"""
+        result = starrocks_rerun.search_tables(
+            payload.get("environment"),
+            payload.get("query", ""),
+            payload.get("limit", 300),
+        )
+        self.send_json(result)
+
+    def handle_rerun_run(self, payload: dict[str, Any]) -> None:
+        """启动独立的 StarRocks 数据重跑，不调用 run_pipeline.py。"""
+        result = starrocks_rerun.start_rerun(payload)
+        self.send_json(result, HTTPStatus.ACCEPTED)
+
     def handle_run_pipeline(self, payload: dict[str, Any]) -> None:
         """写入任务并启动真实流水线。
 
@@ -2114,6 +2212,29 @@ class LakeConsoleHandler(SimpleHTTPRequestHandler):
             },
             HTTPStatus.ACCEPTED,
         )
+
+    def _require_seatunnel_confirmation(self, payload: dict[str, Any], action: str) -> None:
+        """生产环境 SeaTunnel 启停操作必须显式确认。"""
+        if payload.get("confirmed") is not True:
+            raise ValueError(f"{action} SeaTunnel 任务必须显式确认")
+
+    def handle_seatunnel_start(self, payload: dict[str, Any]) -> None:
+        """全新启动一个 SeaTunnel 任务。"""
+        self._require_seatunnel_confirmation(payload, "启动")
+        result = seatunnel_manager.start_job(payload.get("name"))
+        self.send_json(result, HTTPStatus.ACCEPTED)
+
+    def handle_seatunnel_stop(self, payload: dict[str, Any]) -> None:
+        """通过 Savepoint 停止一个 SeaTunnel 任务。"""
+        self._require_seatunnel_confirmation(payload, "停止")
+        result = seatunnel_manager.stop_job(payload.get("name"))
+        self.send_json(result, HTTPStatus.ACCEPTED)
+
+    def handle_seatunnel_restart(self, payload: dict[str, Any]) -> None:
+        """重启一个 SeaTunnel 任务（运行中则先停止再启动）。"""
+        self._require_seatunnel_confirmation(payload, "重启")
+        result = seatunnel_manager.restart_job(payload.get("name"))
+        self.send_json(result, HTTPStatus.ACCEPTED)
 
 
 def verify_environment() -> list[str]:

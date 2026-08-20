@@ -3,9 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>入湖流水线控制台</title>
+  <title>LakeOps · 入湖流水线控制台</title>
+  <meta name="description" content="用于配置、执行和监控 ODS 入湖任务的内部数据工程控制台。" />
+  <meta name="theme-color" content="#10231f" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2310231f'/%3E%3Cpath d='M15 18h8v28h-8zm13 8h8v20h-8zm13-7h8v27h-8z' fill='%2369c9a8'/%3E%3C/svg%3E" />
   <!-- 版本号用于静态部署后的缓存刷新，避免浏览器继续使用旧样式。 -->
-  <link rel="stylesheet" href="styles.css?v=20260817-2" />
+  <link rel="stylesheet" href="styles.css?v=20260820-4" />
 </head>
 <body>
   <!-- 为键盘用户提供跳过重复导航、直达主内容的入口。 -->
@@ -16,26 +19,32 @@
       <div class="brand">
         <span class="brand-dot"></span>
         <div class="brand-text">
-          <strong>入湖控制台</strong>
-          <small>ODS 层一键上线</small>
+          <strong>LakeOps</strong>
+          <small>ODS INGESTION</small>
         </div>
       </div>
 
       <nav class="nav" aria-label="主导航">
         <button class="nav-item is-active" data-view="config" aria-label="任务配置" title="任务配置">
-          <span class="nav-icon">&#9644;</span>任务配置
+          <span class="nav-icon">01</span>任务配置
         </button>
         <button class="nav-item" data-view="monitor" aria-label="运行监控" title="运行监控">
-          <span class="nav-icon">&#9678;</span>运行监控
+          <span class="nav-icon">02</span>运行监控
         </button>
         <button class="nav-item" data-view="history" aria-label="运行记录" title="运行记录">
-          <span class="nav-icon">&#8635;</span>运行记录
+          <span class="nav-icon">03</span>运行记录
         </button>
         <button class="nav-item" data-view="sources" aria-label="数据源管理" title="数据源管理">
-          <span class="nav-icon">&#9673;</span>数据源管理
+          <span class="nav-icon">04</span>数据源管理
         </button>
         <button class="nav-item" data-view="mapping" aria-label="映射管理" title="映射管理">
-          <span class="nav-icon">&#8660;</span>映射管理
+          <span class="nav-icon">05</span>映射管理
+        </button>
+        <button class="nav-item" data-view="seatunnel" aria-label="SeaTunnel 任务" title="SeaTunnel 任务">
+          <span class="nav-icon">06</span>SeaTunnel 任务
+        </button>
+        <button class="nav-item" data-view="rerun" aria-label="数据重跑" title="数据重跑">
+          <span class="nav-icon">07</span>数据重跑
         </button>
       </nav>
 
@@ -64,14 +73,14 @@
         <!-- 首屏概览：让用户进入页面后先看到当前工作模式和下一步动作。 -->
         <div class="config-hero">
           <div class="config-hero-copy">
-            <span class="eyebrow">ODS / PIPELINE WORKSPACE</span>
+            <span class="eyebrow">PIPELINE / 01</span>
             <h2>准备下一批入湖任务</h2>
-            <p>从目录选择数据表，自动生成任务并在启动前完成格式校验。</p>
+            <p>选择源表、生成任务，在正式执行前完成配置核验。</p>
           </div>
           <div class="config-hero-meta">
-            <span class="hero-status"><i></i>真实执行模式</span>
+            <span class="hero-status"><i></i>生产执行模式</span>
             <span class="hero-divider"></span>
-            <span>安全确认后才会启动生产流水线</span>
+            <span>确认任务清单后启动</span>
           </div>
         </div>
 
@@ -175,7 +184,7 @@
         <div class="summary-grid" aria-label="运行摘要">
           <div class="stat"><strong id="stat-pending">0</strong><span>待执行</span></div>
           <div class="stat"><strong id="stat-running">0</strong><span>进行中</span></div>
-          <div class="stat stat-ok"><strong id="stat-succeeded">0</strong><span>完美完成</span></div>
+          <div class="stat stat-ok"><strong id="stat-succeeded">0</strong><span>执行成功</span></div>
           <div class="stat stat-warn"><strong id="stat-failed">0</strong><span>失败 / 中断</span></div>
         </div>
 
@@ -327,6 +336,167 @@
           </div>
         </div>
       </section>
+
+      <!-- 视图：SeaTunnel 任务 -->
+      <section class="view" id="view-seatunnel">
+        <div class="summary-grid" aria-label="SeaTunnel 任务摘要">
+          <div class="stat"><strong id="st-stat-total">0</strong><span>任务总数</span></div>
+          <div class="stat stat-ok"><strong id="st-stat-running">0</strong><span>运行中</span></div>
+          <div class="stat stat-warn"><strong id="st-stat-failed">0</strong><span>异常</span></div>
+          <div class="stat"><strong id="st-stat-delay">-</strong><span>最大延迟</span></div>
+        </div>
+
+        <div class="card seatunnel-node-card">
+          <div class="card-head">
+            <div>
+              <h2>SeaTunnel 节点监控</h2>
+              <p class="muted">实时读取 Hazelcast 集群成员与各节点健康状态。</p>
+            </div>
+            <span class="badge" id="seatunnel-node-feedback" role="status" aria-live="polite">尚未加载</span>
+          </div>
+          <div class="seatunnel-node-summary">
+            <div><strong id="st-node-total">-</strong><span>节点总数</span></div>
+            <div><strong id="st-node-online">-</strong><span>在线</span></div>
+            <div><strong id="st-node-data">-</strong><span>数据节点</span></div>
+            <div><strong id="st-node-lite">-</strong><span>轻量节点</span></div>
+          </div>
+          <div class="table-wrap">
+            <table class="table seatunnel-node-table">
+              <thead>
+                <tr>
+                  <th>节点地址</th>
+                  <th>角色</th>
+                  <th>状态</th>
+                  <th>节点状态</th>
+                  <th>集群状态 / 安全</th>
+                  <th>Hazelcast 版本</th>
+                  <th>响应耗时</th>
+                </tr>
+              </thead>
+              <tbody id="seatunnel-node-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>SeaTunnel 任务列表</h2>
+              <p class="muted seatunnel-description">管理正式 SeaTunnel 引擎中的物理任务，可查看运行配置（只读）与 CDC 延迟。</p>
+            </div>
+            <div class="seatunnel-card-actions">
+              <span class="badge" id="seatunnel-feedback" role="status" aria-live="polite">尚未加载</span>
+              <button class="btn btn-ghost btn-sm" id="btn-seatunnel-refresh">刷新</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="table seatunnel-table">
+              <thead>
+                <tr>
+                  <th>任务名</th>
+                  <th>模式</th>
+                  <th>状态</th>
+                  <th>延迟</th>
+                  <th>源端接收</th>
+                  <th>目标端写入</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="seatunnel-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- 视图：数据重跑 -->
+      <section class="view" id="view-rerun">
+        <div class="card rerun-card">
+          <div class="card-head">
+            <div>
+              <h2>选择 StarRocks 环境</h2>
+              <p class="muted">直接对选定环境的 ODS 表重新灌数，不调用完整入湖流水线。</p>
+            </div>
+            <span class="badge" id="rerun-status" role="status" aria-live="polite">等待连接</span>
+          </div>
+          <fieldset class="selector-step rerun-environment-step">
+            <legend><span class="selector-step-num">1</span>目标环境（可多选）</legend>
+            <div class="selector-options" id="rerun-environments"></div>
+          </fieldset>
+        </div>
+
+        <div class="card rerun-card">
+          <div class="card-head">
+            <h2>搜索 StarRocks ODS 表</h2>
+          </div>
+          <form id="rerun-search-form" class="catalog-search-form">
+            <label for="rerun-query">ODS 表名（支持逗号、中文逗号或换行分隔）</label>
+            <textarea id="rerun-query" class="catalog-control catalog-query" rows="2" disabled placeholder="例如：ods_user_info, ods_order_detail"></textarea>
+            <button class="btn btn-secondary catalog-control" id="btn-rerun-search" type="submit" disabled>搜索表</button>
+          </form>
+          <div class="catalog-feedback" id="rerun-feedback" aria-live="polite"></div>
+          <div class="table-wrap">
+            <table class="table rerun-table">
+              <thead>
+                <tr>
+                  <th><input type="checkbox" id="rerun-select-all" title="全选结果" /></th>
+                  <th>环境</th>
+                  <th>表名</th>
+                  <th>ODS 目标表</th>
+                  <th>ORI 来源表</th>
+                </tr>
+              </thead>
+              <tbody id="rerun-result-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card rerun-card">
+          <div class="card-head">
+            <div>
+              <h2>已选表</h2>
+              <span class="badge" id="rerun-selected-count">0 张</span>
+            </div>
+            <div class="rerun-actions">
+              <button class="btn btn-secondary" id="btn-rerun-log" type="button" hidden>查看实时日志</button>
+              <button class="btn btn-primary" id="btn-rerun-run" type="button" disabled>执行重跑</button>
+            </div>
+          </div>
+          <div class="rerun-selected-list" id="rerun-selected-list">
+            <span class="muted">尚未选择表</span>
+          </div>
+        </div>
+
+        <div class="card rerun-card">
+          <div class="card-head">
+            <div>
+              <h2>重跑记录</h2>
+              <p class="muted">保留最近 100 次，可按表名、环境或状态查询。</p>
+            </div>
+            <div class="rerun-history-actions">
+              <input class="rerun-history-query" id="rerun-history-query" type="search" placeholder="搜索表名 / 环境 / 状态" />
+              <button class="btn btn-ghost btn-sm" id="btn-rerun-history-refresh" type="button">刷新</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="table rerun-history-table">
+              <thead>
+                <tr>
+                  <th>开始时间</th>
+                  <th>环境</th>
+                  <th>表数</th>
+                  <th>失败</th>
+                  <th>涉及表</th>
+                  <th>状态</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="rerun-history-body">
+                <tr><td colspan="7" class="muted rerun-empty">暂无重跑记录</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -343,7 +513,25 @@
   <!-- 非阻塞操作反馈，避免用户被连续弹窗打断工作流。 -->
   <div class="toast-container" id="toast-container" aria-live="polite" aria-atomic="true"></div>
 
-  <script src="app.js?v=20260817-2" defer></script>
+  <!-- SeaTunnel 操作日志弹窗（居中显示，点击可全屏） -->
+  <div class="log-modal-backdrop" id="log-modal-backdrop" aria-hidden="true"></div>
+  <div class="log-modal" id="log-modal" role="dialog" aria-modal="true" aria-labelledby="log-modal-title" aria-hidden="true">
+    <div class="log-modal-head">
+      <div class="log-modal-head-title">
+        <h2 id="log-modal-title">操作日志</h2>
+        <span class="badge" id="log-modal-status" role="status">已完成</span>
+      </div>
+      <div class="log-modal-actions">
+        <button class="btn btn-ghost btn-sm" id="log-modal-fullscreen" type="button">全屏</button>
+        <button class="btn btn-ghost btn-sm" id="log-modal-close" type="button">关闭</button>
+      </div>
+    </div>
+    <div class="log-modal-body">
+      <pre class="config-viewer log-content" id="log-modal-content"></pre>
+    </div>
+  </div>
+
+  <script src="app.js?v=20260820-15" defer></script>
 </body>
 </html>
 

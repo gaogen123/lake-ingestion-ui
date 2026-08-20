@@ -20,6 +20,10 @@ esource.text
 
     python server.py
 
+## 本地生产连接配置
+
+复制 `seatunnel-secrets.example.json` 为 `.runtime/seatunnel-secrets.json` 并填写真实凭据；也可以设置同名环境变量。`.runtime` 已被 Git 忽略，禁止把生产密码提交到仓库。
+
 ## 安全机制
 
 - 服务默认监听 `0.0.0.0`，可供局域网访问；当前为 HTTP 且无登录鉴权，只应部署在可信内网。
@@ -39,6 +43,11 @@ esource.text
 - 手动停止不会回滚已经完成的建表、配置上传或 SeaTunnel 操作，任务文件会保留以便检查和重试。
 - 后端以原子写入方式更新配置文件。
 - 运行日志来自正式 run_pipeline.py；完整日志仍由正式脚本写入其日志目录。
+- SeaTunnel 任务页读取集群真实任务，支持启动、停止、重启、状态与延迟查看，并可按操作实时查看日志。
+- SeaTunnel 节点监控读取 Hazelcast 真实成员和健康接口，展示节点角色、在线状态、集群安全状态、版本及响应耗时；进入页面后自动刷新，离开页面停止轮询。
+- 数据重跑页可同时选择测试和生产环境，直接查询各环境 StarRocks 的 `ods` 表，不再复用源库目录或 `run_pipeline.py`。
+- 数据重跑默认同时选择测试和生产环境，仅执行 `INSERT OVERWRITE ods.<table> SELECT * FROM ori.<table>`，不会创建、删除或修改表结构。
+- 数据重跑会预先校验同名 `ods` 目标表和 `ori` 来源表；后端逐表串行执行，同一时间只允许一个重跑操作。
 - 最近 100 次运行记录持久化到 `.runtime/pipeline-history`，单次历史日志最多保留末尾 1 MiB。
 - 若控制台在流水线运行期间异常退出，对应历史记录会标记为“终态未知”，不会误判流水线已经停止。
 
@@ -61,3 +70,15 @@ esource.text
 - GET /api/pipeline/status：读取真实运行日志、退出码和逐表结果
 - GET /api/pipeline/history：读取最近 100 次运行摘要
 - GET /api/pipeline/history/{runId}：读取指定运行的任务、逐表结果和历史日志
+- GET /api/rerun/environments：读取可用的测试/生产 StarRocks 环境
+- POST /api/rerun/tables：在选定环境中模糊搜索真实 ODS 表并检查同名 ORI 表
+- POST /api/rerun/run：异步执行多表 `INSERT OVERWRITE` 重新灌数
+- GET /api/rerun/status/{operationId}：读取数据重跑实时日志与逐表结果
+- GET /api/rerun/history：查询最近 100 次数据重跑记录
+- GET /api/rerun/history/{operationId}：读取历史重跑的完整日志与逐表结果
+- GET /api/seatunnel/nodes：读取 SeaTunnel/Hazelcast 集群成员和节点健康状态
+- GET /api/seatunnel/jobs：读取 SeaTunnel 物理任务列表、状态与 CDC 延迟
+- GET /api/seatunnel/jobs/{name}/config：读取单个任务的运行配置（只读）
+- POST /api/seatunnel/jobs/start：全新启动指定 SeaTunnel 任务
+- POST /api/seatunnel/jobs/stop：通过 Savepoint 停止指定 SeaTunnel 任务
+- POST /api/seatunnel/jobs/restart：重启指定 SeaTunnel 任务（运行中则先停再启）
