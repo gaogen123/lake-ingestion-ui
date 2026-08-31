@@ -1490,4 +1490,339 @@ code {
   html { scroll-behavior: auto; }
 }
 
+/* ============ Agency Orchestrator 合并视图 ============ */
+
+/* 明确恢复 hidden 的原生语义，避免组件自身 display 样式覆盖隐藏状态。 */
+[hidden] { display: none !important; }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.agency-hero {
+  position: relative;
+  overflow: hidden;
+  padding: clamp(28px, 5vw, 54px);
+  color: #f7fffb;
+  background:
+    radial-gradient(circle at 88% 12%, rgba(105, 201, 168, 0.22), transparent 22rem),
+    linear-gradient(135deg, #102f27, #173f34 58%, #245c4c);
+  border: 1px solid rgba(105, 201, 168, 0.16);
+  border-radius: 4px 18px 4px 4px;
+  box-shadow: 0 18px 48px rgba(18, 57, 47, 0.12);
+}
+
+.agency-hero::after {
+  position: absolute;
+  right: -70px;
+  bottom: -110px;
+  width: 300px;
+  height: 300px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 50%;
+  content: "";
+  box-shadow: 0 0 0 48px rgba(255, 255, 255, 0.025), 0 0 0 96px rgba(255, 255, 255, 0.018);
+  pointer-events: none;
+}
+
+.agency-hero-copy,
+.agency-composer { position: relative; z-index: 1; }
+
+.agency-hero-copy { margin-bottom: 25px; }
+
+.agency-hero-copy .eyebrow { color: #86d9ba; }
+
+.agency-hero-copy p {
+  margin: 8px 0;
+  color: #b9d9cd;
+  font-size: 13px;
+}
+
+.agency-hero-copy h2 {
+  margin: 0;
+  color: #fff;
+  font-size: clamp(28px, 4vw, 42px);
+  letter-spacing: -0.04em;
+}
+
+.agency-composer {
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 12px;
+  box-shadow: 0 13px 32px rgba(4, 22, 17, 0.24);
+}
+
+.agency-composer textarea {
+  display: block;
+  width: 100%;
+  min-height: 112px;
+  padding: 18px 20px;
+  resize: vertical;
+  color: var(--text);
+  background: #fff;
+  border: 0;
+  outline: 0;
+  line-height: 1.65;
+}
+
+.agency-composer textarea:focus-visible { box-shadow: inset 0 0 0 2px var(--primary); }
+
+.agency-composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px 9px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.agency-mode {
+  margin-right: auto;
+  padding: 6px 9px;
+  color: var(--primary-dark);
+  background: var(--primary-soft);
+  border: 0;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.agency-selected-summary {
+  max-width: 280px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agency-overview {
+  margin-top: 24px;
+  padding: 24px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px 14px 4px 4px;
+  box-shadow: var(--shadow);
+}
+
+.agency-overview .card-head { margin-bottom: 16px; }
+.agency-overview .eyebrow { display: block; }
+.agency-overview h2 { margin: 0; font-size: 18px; }
+
+.agency-task-list { display: grid; gap: 10px; }
+
+.agency-empty {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  align-content: center;
+  gap: 7px;
+  padding: 28px;
+  color: var(--muted);
+  text-align: center;
+  background: #f8faf9;
+  border: 1px dashed #cddbd5;
+  border-radius: 8px;
+}
+
+.agency-empty strong { color: var(--text); font-size: 15px; }
+.agency-empty span { font-size: 12px; }
+
+.agency-task-card {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 17px 18px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--primary);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agency-task-card:hover,
+.agency-task-card.is-selected { border-color: #91b7a8; background: #f7fbf9; }
+
+.agency-task-card-body {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 5px;
+}
+
+.agency-task-card strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agency-task-card-body > span { color: var(--muted); font-size: 12px; }
+
+.agency-task-status {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  color: var(--primary-dark);
+  background: var(--primary-soft);
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.agency-task-status.is-running,
+.agency-task-status.is-queued,
+.agency-task-status.is-cancelling { color: #8a5b08; background: #fff1cc; }
+.agency-task-status.is-succeeded { color: #146846; background: #dff2e9; }
+.agency-task-status.is-failed,
+.agency-task-status.is-interrupted { color: #a12b2b; background: #fde5e5; }
+.agency-task-status.is-cancelled { color: #58606d; background: #e9edf0; }
+
+.agency-task-detail {
+  margin-top: 18px;
+  padding: 22px;
+  background: #f8faf9;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.agency-task-detail-head,
+.agency-detail-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agency-task-detail-head h3 { margin: 0; font-size: 17px; }
+.agency-detail-actions { justify-content: flex-end; }
+.agency-detail-section { display: grid; gap: 8px; margin-top: 18px; }
+.agency-detail-experts { display: flex; flex-wrap: wrap; gap: 7px; }
+
+.agency-task-log,
+.agency-task-result {
+  max-height: 360px;
+  min-height: 90px;
+  margin: 0;
+  overflow: auto;
+  padding: 14px;
+  color: #d4e5df;
+  background: #10231f;
+  border-radius: 6px;
+  font: 12px/1.65 "Cascadia Code", "Consolas", monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agency-task-result { color: var(--text); background: #fff; border: 1px solid var(--border); }
+
+.agency-task-error {
+  margin-top: 14px;
+  padding: 11px 13px;
+  color: #991b1b;
+  background: #fff0f0;
+  border: 1px solid #efc4c4;
+  border-radius: 6px;
+}
+
+.agency-expert-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.agency-expert-toolbar > div:first-child { margin-right: auto; }
+.agency-expert-toolbar h2 { margin: 0 0 4px; }
+.agency-expert-toolbar p { margin: 0; }
+
+.agency-expert-search input {
+  width: min(320px, 28vw);
+  padding: 9px 11px;
+  color: var(--text);
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.agency-expert-search input:focus { outline: 2px solid rgba(39, 126, 100, 0.2); border-color: var(--primary); }
+
+.agency-expert-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.agency-expert-card {
+  display: flex;
+  gap: 12px;
+  min-height: 150px;
+  padding: 17px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.agency-expert-card:hover { border-color: #a9c9bd; box-shadow: 0 8px 24px rgba(18, 57, 47, 0.07); }
+.agency-expert-card.is-selected { border-color: var(--primary); box-shadow: inset 3px 0 0 var(--primary); }
+.agency-expert-card input { flex: 0 0 auto; margin-top: 3px; accent-color: var(--primary); }
+
+.agency-expert-card-body { display: grid; align-content: start; gap: 7px; min-width: 0; }
+.agency-expert-card-body small { color: var(--primary-dark); font-size: 10px; letter-spacing: 0.08em; }
+.agency-expert-card-body strong { overflow-wrap: anywhere; }
+.agency-expert-card-body > span { color: var(--muted); font-size: 12px; line-height: 1.6; }
+
+/* 专家库按需求只展示空状态，不预置专家卡片或尚未确认的管理按钮。 */
+.agency-expert-empty {
+  display: grid;
+  min-height: min(570px, 66vh);
+  place-items: center;
+  align-content: center;
+  padding: 40px;
+  text-align: center;
+  background: var(--panel);
+  border: 1px dashed #cddbd5;
+  border-radius: 4px 16px 4px 4px;
+}
+
+.agency-expert-icon {
+  display: grid;
+  width: 76px;
+  height: 76px;
+  margin-bottom: 20px;
+  place-items: center;
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-radius: 22px;
+  font-size: 36px;
+  font-weight: 300;
+}
+
+.agency-expert-empty h2 { margin: 0 0 8px; font-size: 22px; }
+.agency-expert-empty p { margin: 0; color: var(--muted); }
+
+@media (max-width: 640px) {
+  .agency-hero { padding: 26px 18px 20px; }
+  .agency-composer textarea { min-height: 130px; }
+  .agency-composer-actions .muted { display: none; }
+  .agency-selected-summary { display: none; }
+  .agency-overview { padding: 16px; }
+  .agency-task-detail-head,
+  .agency-expert-toolbar { align-items: stretch; flex-direction: column; }
+  .agency-expert-search input { width: 100%; }
+  .agency-expert-grid { grid-template-columns: 1fr; }
+}
+
 

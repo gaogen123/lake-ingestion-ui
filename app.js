@@ -20,6 +20,22 @@
     },
     // 当前页面视图。
     view: 'config',
+    // Agency 专家、任务与轮询状态独立管理，不复用入湖流水线的定时器。
+    agency: {
+      experts: [],
+      selectedExpertIds: {},
+      expertQuery: '',
+      tasks: [],
+      selectedTaskId: null,
+      taskDetail: null,
+      expertsLoaded: false,
+      tasksLoaded: false,
+      loadingExperts: false,
+      loadingTasks: false,
+      submitting: false,
+      polling: false,
+      pollTimer: null
+    },
     // 打开抽屉前的焦点元素，关闭后把焦点还给原来的操作入口。
     drawerReturnFocus: null,
     // 是否存在正在运行或停止中的真实流水线。
@@ -262,6 +278,38 @@
   var api = {
     health: function () {
       return requestJson(API_BASE + '/health');
+    },
+
+    fetchAgencyExperts: function () {
+      return requestJson(API_BASE + '/agency/experts');
+    },
+
+    fetchAgencyExpertPrompt: function (expertId) {
+      return requestJson(API_BASE + '/agency/experts/' + encodeURIComponent(expertId) + '/prompt');
+    },
+
+    fetchAgencyTasks: function () {
+      return requestJson(API_BASE + '/agency/tasks');
+    },
+
+    fetchAgencyTask: function (taskId) {
+      return requestJson(API_BASE + '/agency/tasks/' + encodeURIComponent(taskId));
+    },
+
+    createAgencyTask: function (description, expertIds) {
+      return requestJson(API_BASE + '/agency/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: description, expertIds: expertIds })
+      });
+    },
+
+    cancelAgencyTask: function (taskId) {
+      return requestJson(API_BASE + '/agency/tasks/' + encodeURIComponent(taskId) + '/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
     },
 
     fetchTasks: function () {
@@ -1461,6 +1509,14 @@
 
   // ============ 视图与详情 ============
   var PAGE_TITLES = {
+    workbench: {
+      title: '工作台',
+      subtitle: '创建协作任务，并使用完整的入湖工具链'
+    },
+    experts: {
+      title: '专家库',
+      subtitle: '管理参与任务编排的领域专家'
+    },
     config: {
       title: '任务配置',
       subtitle: '维护正式 resource.text，并启动真实入湖流水线'
@@ -1491,7 +1547,231 @@
     }
   };
 
+  var AGENCY_ACTIVE_STATUSES = ['queued', 'running', 'cancelling'];
+  var AGENCY_STATUS_LABELS = {
+    queued: '排队中',
+    running: '执行中',
+    cancelling: '正在取消',
+    cancelled: '已取消',
+    succeeded: '已完成',
+    failed: '执行失败',
+    interrupted: '已中断'
+  };
+
+  function agencyExpertLabel(expertId) {
+    var expert = state.agency.experts.find(function (item) { return item.id === expertId; });
+    return expert ? expert.name : expertId;
+  }
+
+  /** 同步工作台的专家选择摘要，显式选择最多五位；不选择表示由编排器自动匹配。 */
+  function renderAgencySelectionSummary() {
+    var selectedIds = Object.keys(state.agency.selectedExpertIds);
+    $('#agency-selected-experts').textContent = selectedIds.length
+      ? '已选择 ' + selectedIds.length + ' 位专家'
+      : '未指定专家，由编排器自动选择';
+    $('#btn-choose-agency-experts').textContent = selectedIds.length ? '调整专家' : '智能编排';
+  }
+
+  /** 使用原生复选框渲染专家，所有后端文本都通过 textContent 写入。 */
+  function renderAgencyExperts() {
+    var list = $('#agency-expert-list');
+    var query = state.agency.expertQuery.trim().toLowerCase();
+    var matches = state.agency.experts.filter(function (expert) {
+      var searchable = [expert.id, expert.name, expert.description, expert.category]
+        .concat(expert.tags || []).join(' ').toLowerCase();
+      return !query || searchable.indexOf(query) !== -1;
+    });
+    list.textContent = '';
+    $('#agency-expert-count').textContent = matches.length + ' / ' + state.agency.experts.length + ' 位';
+    $('#agency-expert-empty').hidden = Boolean(matches.length);
+
+    matches.forEach(function (expert) {
+      var label = document.createElement('label');
+      label.className = 'agency-expert-card';
+      label.classList.toggle('is-selected', Boolean(state.agency.selectedExpertIds[expert.id]));
+      var checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.value = expert.id;
+      checkbox.checked = Boolean(state.agency.selectedExpertIds[expert.id]);
+      checkbox.setAttribute('data-agency-expert', '');
+      var body = document.createElement('span');
+      body.className = 'agency-expert-card-body';
+      var category = document.createElement('small');
+      category.textContent = expert.category;
+      var name = document.createElement('strong');
+      name.textContent = expert.name;
+      var description = document.createElement('span');
+      description.textContent = expert.description;
+      body.append(category, name, description);
+      label.append(checkbox, body);
+      list.appendChild(label);
+    });
+  }
+
+  function loadAgencyExperts(showError) {
+    if (state.agency.loadingExperts) return Promise.resolve();
+    state.agency.loadingExperts = true;
+    return api.fetchAgencyExperts().then(function (payload) {
+      state.agency.experts = payload.experts || [];
+      state.agency.expertsLoaded = true;
+      renderAgencyExperts();
+      renderAgencySelectionSummary();
+    }).catch(function (error) {
+      if (showError) notify('读取专家库失败：' + error.message, 'error');
+      throw error;
+    }).finally(function () {
+      state.agency.loadingExperts = false;
+    });
+  }
+
+  function renderAgencyTasks() {
+    var list = $('#agency-task-list');
+    list.textContent = '';
+    $('#agency-task-count').textContent = state.agency.tasks.length + ' 个任务';
+    if (!state.agency.tasks.length) {
+      var empty = document.createElement('div');
+      empty.className = 'agency-empty';
+      var title = document.createElement('strong');
+      title.textContent = '还没有任务';
+      var hint = document.createElement('span');
+      hint.textContent = '在上方描述目标，创建你的第一个协作任务。';
+      empty.append(title, hint);
+      list.appendChild(empty);
+      return;
+    }
+
+    state.agency.tasks.forEach(function (task) {
+      var card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'agency-task-card';
+      card.setAttribute('data-agency-task', task.id);
+      card.classList.toggle('is-selected', task.id === state.agency.selectedTaskId);
+      var body = document.createElement('span');
+      body.className = 'agency-task-card-body';
+      var title = document.createElement('strong');
+      title.textContent = task.description;
+      var meta = document.createElement('span');
+      meta.textContent = (task.createdAt || '') + ' · ' + (task.stage || '等待启动');
+      var status = document.createElement('span');
+      status.className = 'agency-task-status is-' + task.status;
+      status.textContent = AGENCY_STATUS_LABELS[task.status] || task.status;
+      body.append(title, meta);
+      card.append(body, status);
+      list.appendChild(card);
+    });
+  }
+
+  function renderAgencyTaskDetail() {
+    var task = state.agency.taskDetail;
+    $('#agency-task-detail').hidden = !task;
+    if (!task) return;
+    $('#agency-task-detail-title').textContent = task.description;
+    var status = $('#agency-task-detail-status');
+    status.className = 'agency-task-status is-' + task.status;
+    status.textContent = AGENCY_STATUS_LABELS[task.status] || task.status;
+    $('#agency-task-detail-log').textContent = task.log || '等待执行…';
+    $('#agency-task-detail-result').textContent = task.result || '';
+    $('#agency-result-section').hidden = !task.result;
+    $('#agency-task-detail-error').textContent = task.error || '';
+    $('#agency-task-detail-error').hidden = !task.error;
+    $('#btn-cancel-agency-task').hidden = AGENCY_ACTIVE_STATUSES.indexOf(task.status) === -1;
+
+    var experts = $('#agency-task-detail-experts');
+    experts.textContent = '';
+    (task.selectedExperts || []).forEach(function (expertId) {
+      var tag = document.createElement('span');
+      tag.className = 'badge';
+      tag.textContent = agencyExpertLabel(expertId);
+      experts.appendChild(tag);
+    });
+  }
+
+  function loadAgencyTaskDetail(taskId) {
+    if (!taskId) return Promise.resolve();
+    return api.fetchAgencyTask(taskId).then(function (task) {
+      state.agency.selectedTaskId = task.id;
+      state.agency.taskDetail = task;
+      renderAgencyTasks();
+      renderAgencyTaskDetail();
+      return task;
+    });
+  }
+
+  function loadAgencyTasks(showError) {
+    if (state.agency.loadingTasks) return Promise.resolve();
+    state.agency.loadingTasks = true;
+    return api.fetchAgencyTasks().then(function (payload) {
+      state.agency.tasks = payload.tasks || [];
+      state.agency.tasksLoaded = true;
+      renderAgencyTasks();
+      if (!state.agency.selectedTaskId && state.agency.tasks.length) {
+        state.agency.selectedTaskId = state.agency.tasks[0].id;
+      }
+      return loadAgencyTaskDetail(state.agency.selectedTaskId);
+    }).catch(function (error) {
+      if (showError) notify('读取 Agent 任务失败：' + error.message, 'error');
+      throw error;
+    }).finally(function () {
+      state.agency.loadingTasks = false;
+    });
+  }
+
+  function stopAgencyPolling() {
+    window.clearTimeout(state.agency.pollTimer);
+    state.agency.pollTimer = null;
+    state.agency.polling = false;
+  }
+
+  /** 串行轮询任务，上一请求结束后再计划下一次，避免慢响应覆盖新状态。 */
+  function startAgencyPolling() {
+    if (state.agency.polling || state.view !== 'workbench') return;
+    state.agency.polling = true;
+    function poll() {
+      loadAgencyTasks(false).catch(function () {
+        // 网络短暂失败时保留下一轮，页面仍展示最后一次成功状态。
+      }).finally(function () {
+        var hasActiveTask = state.agency.tasks.some(function (task) {
+          return AGENCY_ACTIVE_STATUSES.indexOf(task.status) !== -1;
+        });
+        if (state.view === 'workbench' && hasActiveTask) {
+          state.agency.pollTimer = window.setTimeout(poll, 1500);
+        } else {
+          stopAgencyPolling();
+        }
+      });
+    }
+    poll();
+  }
+
+  function submitAgencyTask() {
+    if (state.agency.submitting) return;
+    var input = $('#agency-task-input');
+    var description = input.value.trim();
+    if (!description) {
+      input.setCustomValidity('请先输入任务描述');
+      input.reportValidity();
+      return;
+    }
+    input.setCustomValidity('');
+    state.agency.submitting = true;
+    $('#btn-submit-agency-task').disabled = true;
+    api.createAgencyTask(description, Object.keys(state.agency.selectedExpertIds)).then(function (task) {
+      input.value = '';
+      state.agency.selectedTaskId = task.id;
+      state.agency.taskDetail = task;
+      notify('Agent 编排任务已启动。', 'success');
+      return loadAgencyTasks(true);
+    }).then(startAgencyPolling).catch(function (error) {
+      notify('启动 Agent 编排失败：' + error.message, 'error');
+    }).finally(function () {
+      state.agency.submitting = false;
+      $('#btn-submit-agency-task').disabled = false;
+    });
+  }
+
   function switchView(view) {
+    // 只允许切换到已注册页面，避免错误入口导致标题读取异常。
+    if (!PAGE_TITLES[view] || !document.querySelector('#view-' + view)) return;
     state.view = view;
     document.querySelectorAll('.nav-item').forEach(function (button) {
       var active = button.dataset.view === view;
@@ -1505,9 +1785,27 @@
     document.querySelectorAll('.view').forEach(function (section) {
       section.classList.toggle('is-active', section.id === 'view-' + view);
     });
+    // 原有七个模块保持原布局；只在新增的工作台和专家库中隐藏流水线专用操作。
+    $('#topbar-actions').hidden = view === 'workbench' || view === 'experts';
     $('#page-title').textContent = PAGE_TITLES[view].title;
     $('#page-subtitle').textContent = PAGE_TITLES[view].subtitle;
     document.title = PAGE_TITLES[view].title + '｜入湖流水线控制台';
+    window.history.replaceState(null, '', '#' + view);
+    if (view === 'workbench') {
+      Promise.all([
+        state.agency.expertsLoaded ? Promise.resolve() : loadAgencyExperts(false),
+        loadAgencyTasks(false)
+      ]).then(startAgencyPolling).catch(function () {
+        // Agency 视图自行展示最后一次状态；失败不影响原入湖模块。
+      });
+    } else {
+      stopAgencyPolling();
+    }
+    if (view === 'experts' && !state.agency.expertsLoaded) {
+      loadAgencyExperts(true).catch(function () {
+        // 专家库保留错误轻提示，用户可重新进入后重试。
+      });
+    }
     if (view === 'sources' && !state.sourceManagement.loaded && !state.sourceManagement.loading) {
       loadSourceManagement().catch(function () {
         // 管理视图内已显示加载错误，保留页面供用户刷新重试。
@@ -2473,6 +2771,80 @@
       });
     });
 
+    $('#agency-task-form').addEventListener('submit', function (event) {
+      event.preventDefault();
+      submitAgencyTask();
+    });
+
+    $('#agency-task-input').addEventListener('input', function (event) {
+      event.currentTarget.setCustomValidity('');
+    });
+
+    $('#agency-task-input').addEventListener('keydown', function (event) {
+      if (event.ctrlKey && event.key === 'Enter') {
+        event.preventDefault();
+        $('#agency-task-form').requestSubmit();
+      }
+    });
+
+    $('#btn-choose-agency-experts').addEventListener('click', function () {
+      switchView('experts');
+    });
+
+    $('#btn-use-agency-experts').addEventListener('click', function () {
+      switchView('workbench');
+      $('#agency-task-input').focus();
+    });
+
+    $('#btn-clear-agency-experts').addEventListener('click', function () {
+      state.agency.selectedExpertIds = {};
+      renderAgencyExperts();
+      renderAgencySelectionSummary();
+    });
+
+    $('#agency-expert-search').addEventListener('input', function (event) {
+      state.agency.expertQuery = event.target.value;
+      renderAgencyExperts();
+    });
+
+    $('#agency-expert-list').addEventListener('change', function (event) {
+      var checkbox = event.target.closest('[data-agency-expert]');
+      if (!checkbox) return;
+      var selectedIds = Object.keys(state.agency.selectedExpertIds);
+      if (checkbox.checked && selectedIds.length >= 5) {
+        checkbox.checked = false;
+        notify('一次最多选择 5 位专家。', 'warning');
+        return;
+      }
+      if (checkbox.checked) {
+        state.agency.selectedExpertIds[checkbox.value] = true;
+      } else {
+        delete state.agency.selectedExpertIds[checkbox.value];
+      }
+      renderAgencyExperts();
+      renderAgencySelectionSummary();
+    });
+
+    $('#agency-task-list').addEventListener('click', function (event) {
+      var card = event.target.closest('[data-agency-task]');
+      if (!card) return;
+      loadAgencyTaskDetail(card.dataset.agencyTask).catch(function (error) {
+        notify('读取 Agent 任务详情失败：' + error.message, 'error');
+      });
+    });
+
+    $('#btn-cancel-agency-task').addEventListener('click', function () {
+      var task = state.agency.taskDetail;
+      if (!task) return;
+      api.cancelAgencyTask(task.id).then(function (updatedTask) {
+        state.agency.taskDetail = updatedTask;
+        renderAgencyTaskDetail();
+        startAgencyPolling();
+      }).catch(function (error) {
+        notify('取消 Agent 任务失败：' + error.message, 'error');
+      });
+    });
+
     $('#catalog-selector').addEventListener('change', function (event) {
       var target = event.target;
       if (target.name === 'catalog-system') {
@@ -2975,6 +3347,8 @@
   // ============ 初始化 ============
   function init() {
     bindEvents();
+    renderAgencyTasks();
+    renderAgencySelectionSummary();
     renderResults();
     renderHistory();
     renderCatalog();
@@ -2982,7 +3356,9 @@
     renderSeatunnel();
     renderRerun();
     renderRerunHistory();
-    switchView('config');
+    // 支持刷新后保留当前页面；未知地址安全回退到工作台。
+    var initialView = window.location.hash.slice(1);
+    switchView(PAGE_TITLES[initialView] ? initialView : 'config');
 
     // 先验证后端确实指向正式流水线，再读取正式配置。
     api.health().then(function (health) {
@@ -3039,6 +3415,7 @@
     stopPolling();
     stopSeatunnelPolling();
     stopSeatunnelOperationPolling();
+    stopAgencyPolling();
   });
   init();
 })();

@@ -10,6 +10,7 @@ import argparse
 import ast
 import base64
 import importlib
+import ipaddress
 import json
 import os
 import re
@@ -29,6 +30,8 @@ from urllib.parse import urlparse
 
 import seatunnel_manager
 import starrocks_rerun
+import agency_orchestrator
+import agency_providers
 
 
 # 前端静态文件目录。
@@ -1688,9 +1691,75 @@ class LakeConsoleHandler(SimpleHTTPRequestHandler):
             raise ValueError("JSON 根节点必须是对象")
         return payload
 
+    def ensure_local_agency_request(self, require_json: bool = False) -> bool:
+        """限制 Agent API 为本机同源请求，避免局域网匿名触发 Codex 执行。"""
+        try:
+            if not ipaddress.ip_address(self.client_address[0]).is_loopback:
+                self.send_json({"error": "Agent 编排接口仅允许本机访问"}, HTTPStatus.FORBIDDEN)
+                return False
+        except ValueError:
+            self.send_json({"error": "无法识别客户端地址"}, HTTPStatus.FORBIDDEN)
+            return False
+
+        host_header = self.headers.get("Host", "")
+        host_name = urlparse("//" + host_header).hostname
+        if host_name not in {"127.0.0.1", "localhost", "::1"}:
+            self.send_json({"error": "Agent 编排接口拒绝非本机 Host"}, HTTPStatus.FORBIDDEN)
+            return False
+
+        origin = self.headers.get("Origin")
+        if origin and urlparse(origin).netloc.lower() != host_header.lower():
+            self.send_json({"error": "Agent 编排接口拒绝跨站请求"}, HTTPStatus.FORBIDDEN)
+            return False
+
+        if require_json and not self.headers.get("Content-Type", "").lower().startswith("application/json"):
+            self.send_json({"error": "请求必须使用 application/json"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+            return False
+        return True
+
     def do_GET(self) -> None:
         """处理健康检查、配置读取和状态查询。"""
         path = urlparse(self.path).path
+        if path == "/api/agency/providers":
+            if self.ensure_local_agency_request():
+                self.send_json(agency_providers.list_providers())
+            return
+        if path == "/api/agency/experts":
+            if self.ensure_local_agency_request():
+                experts = agency_orchestrator.list_public_experts()
+                self.send_json({"experts": experts, "count": len(experts)})
+            return
+        agency_expert_prefix = "/api/agency/experts/"
+        agency_prompt_suffix = "/prompt"
+        if path.startswith(agency_expert_prefix) and path.endswith(agency_prompt_suffix):
+            if not self.ensure_local_agency_request():
+                return
+            expert_id = path[len(agency_expert_prefix):-len(agency_prompt_suffix)]
+            try:
+                self.send_json(
+                    {
+                        "id": expert_id,
+                        "prompt": agency_orchestrator.get_expert_prompt(expert_id),
+                    }
+                )
+            except agency_orchestrator.AgencyOrchestratorError as exc:
+                self.send_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+            return
+        if path == "/api/agency/tasks":
+            if self.ensure_local_agency_request():
+                self.send_json({"tasks": agency_orchestrator.AGENCY_STATE.list()})
+            return
+        agency_task_prefix = "/api/agency/tasks/"
+        if path.startswith(agency_task_prefix):
+            if not self.ensure_local_agency_request():
+                return
+            task_id = path[len(agency_task_prefix):]
+            task = agency_orchestrator.AGENCY_STATE.get(task_id)
+            if task is None:
+                self.send_json({"error": "Agent 任务不存在"}, HTTPStatus.NOT_FOUND)
+            else:
+                self.send_json(task)
+            return
         if path == "/api/health":
             self.send_json(
                 {
@@ -1836,7 +1905,37 @@ class LakeConsoleHandler(SimpleHTTPRequestHandler):
         """处理配置保存和真实流水线启动。"""
         path = urlparse(self.path).path
         try:
+            if path.startswith("/api/agency/") and not self.ensure_local_agency_request(require_json=True):
+                return
             payload = self.read_json()
+            if path == "/api/agency/providers/configure":
+                self.send_json(
+                    agency_providers.configure_cloud_provider(
+                        payload.get("providerId"),
+                        payload.get("apiKey", ""),
+                        payload.get("model"),
+                    )
+                )
+                return
+            if path == "/api/agency/providers/current":
+                self.send_json(agency_providers.set_current_provider(payload.get("providerId")))
+                return
+            if path == "/api/agency/providers/clear":
+                self.send_json(agency_providers.clear_cloud_key(payload.get("providerId")))
+                return
+            if path == "/api/agency/tasks":
+                task = agency_orchestrator.AGENCY_STATE.create(
+                    payload.get("description"),
+                    payload.get("expertIds"),
+                )
+                self.send_json(task, HTTPStatus.ACCEPTED)
+                return
+            agency_cancel_suffix = "/cancel"
+            if path.startswith("/api/agency/tasks/") and path.endswith(agency_cancel_suffix):
+                task_id = path[len("/api/agency/tasks/"):-len(agency_cancel_suffix)]
+                task = agency_orchestrator.AGENCY_STATE.cancel(task_id)
+                self.send_json(task, HTTPStatus.ACCEPTED)
+                return
             if path == "/api/tasks":
                 self.handle_save_tasks(payload)
                 return
@@ -1889,6 +1988,10 @@ class LakeConsoleHandler(SimpleHTTPRequestHandler):
         except seatunnel_manager.SeaTunnelError as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
         except starrocks_rerun.StarRocksRerunError as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.CONFLICT)
+        except agency_orchestrator.AgencyOrchestratorError as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.CONFLICT)
+        except agency_providers.AgencyProviderError as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.CONFLICT)
         except ValueError as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)

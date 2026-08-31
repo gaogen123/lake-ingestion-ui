@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#10231f" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2310231f'/%3E%3Cpath d='M15 18h8v28h-8zm13 8h8v20h-8zm13-7h8v27h-8z' fill='%2369c9a8'/%3E%3C/svg%3E" />
   <!-- 版本号用于静态部署后的缓存刷新，避免浏览器继续使用旧样式。 -->
-  <link rel="stylesheet" href="styles.css?v=20260820-4" />
+  <link rel="stylesheet" href="styles.css?v=20260831-7" />
 </head>
 <body>
   <!-- 为键盘用户提供跳过重复导航、直达主内容的入口。 -->
@@ -25,7 +25,7 @@
       </div>
 
       <nav class="nav" aria-label="主导航">
-        <button class="nav-item is-active" data-view="config" aria-label="任务配置" title="任务配置">
+        <button class="nav-item is-active" data-view="config" aria-label="任务配置" title="任务配置" aria-current="page">
           <span class="nav-icon">01</span>任务配置
         </button>
         <button class="nav-item" data-view="monitor" aria-label="运行监控" title="运行监控">
@@ -46,6 +46,12 @@
         <button class="nav-item" data-view="rerun" aria-label="数据重跑" title="数据重跑">
           <span class="nav-icon">07</span>数据重跑
         </button>
+        <button class="nav-item" data-view="workbench" aria-label="工作台" title="工作台">
+          <span class="nav-icon">08</span>工作台
+        </button>
+        <button class="nav-item" data-view="experts" aria-label="专家库" title="专家库">
+          <span class="nav-icon">09</span>专家库
+        </button>
       </nav>
 
       <div class="sidebar-footer">
@@ -61,15 +67,81 @@
           <h1 id="page-title">任务配置</h1>
           <p id="page-subtitle">维护正式 resource.text，并启动真实入湖流水线</p>
         </div>
-        <div class="topbar-actions">
+        <div class="topbar-actions" id="topbar-actions">
           <button class="btn btn-ghost" id="btn-validate">校验格式</button>
           <button class="btn btn-primary" id="btn-run">&#9654; 启动真实流水线</button>
           <button class="btn btn-danger" id="btn-stop" hidden>&#9632; 手动停止入湖</button>
         </div>
       </header>
 
+      <!-- 视图：Agency Orchestrator 工作台 -->
+      <section class="view is-active" id="view-workbench">
+        <div class="agency-hero">
+          <div class="agency-hero-copy">
+            <span class="eyebrow">AGENCY / WORKBENCH</span>
+            <p>让专业的人，协作完成复杂的事</p>
+            <h2>今天想完成什么？</h2>
+          </div>
+          <form class="agency-composer" id="agency-task-form">
+            <label class="sr-only" for="agency-task-input">协作任务描述</label>
+            <textarea id="agency-task-input" rows="4" maxlength="8000" required placeholder="描述你的目标、背景和期望结果，系统将为你组织合适的专家……"></textarea>
+            <div class="agency-composer-actions">
+              <button class="agency-mode" id="btn-choose-agency-experts" type="button">智能编排</button>
+              <span class="agency-selected-summary" id="agency-selected-experts">未指定专家，由编排器自动选择</span>
+              <button class="agency-provider-button" id="btn-agency-provider" type="button">
+                <span id="agency-provider-label">Codex CLI</span>
+                <span aria-hidden="true">⌄</span>
+              </button>
+              <span class="muted">Ctrl + Enter 发送</span>
+              <button class="btn btn-primary" id="btn-submit-agency-task" type="submit">启动编排</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="agency-overview">
+          <div class="card-head">
+            <div>
+              <span class="eyebrow">OVERVIEW</span>
+              <h2>任务概览</h2>
+            </div>
+            <span class="badge" id="agency-task-count">0 个任务</span>
+          </div>
+          <div class="agency-task-list" id="agency-task-list" aria-live="polite">
+            <div class="agency-empty" id="agency-task-empty">
+              <strong>还没有任务</strong>
+              <span>在上方描述目标，创建你的第一个协作任务。</span>
+            </div>
+          </div>
+          <section class="agency-task-detail" id="agency-task-detail" aria-labelledby="agency-task-detail-title" hidden>
+            <div class="agency-task-detail-head">
+              <div>
+                <span class="eyebrow">TASK DETAIL</span>
+                <h3 id="agency-task-detail-title">任务详情</h3>
+              </div>
+              <div class="agency-detail-actions">
+                <span class="agency-task-status" id="agency-task-detail-status">等待启动</span>
+                <button class="btn btn-danger btn-sm" id="btn-cancel-agency-task" type="button" hidden>取消任务</button>
+              </div>
+            </div>
+            <div class="agency-detail-section">
+              <strong>参与专家</strong>
+              <div class="agency-detail-experts" id="agency-task-detail-experts"></div>
+            </div>
+            <div class="agency-detail-section">
+              <strong>执行日志</strong>
+              <pre class="agency-task-log" id="agency-task-detail-log" role="log" aria-live="polite">等待执行…</pre>
+            </div>
+            <div class="agency-detail-section" id="agency-result-section" hidden>
+              <strong>最终结果</strong>
+              <pre class="agency-task-result" id="agency-task-detail-result"></pre>
+            </div>
+            <div class="agency-task-error" id="agency-task-detail-error" role="alert" hidden></div>
+          </section>
+        </div>
+      </section>
+
       <!-- 视图：任务配置 -->
-      <section class="view is-active" id="view-config">
+      <section class="view" id="view-config">
         <!-- 首屏概览：让用户进入页面后先看到当前工作模式和下一步动作。 -->
         <div class="config-hero">
           <div class="config-hero-copy">
@@ -497,8 +569,81 @@
           </div>
         </div>
       </section>
+
+      <!-- 视图：专家库动态加载本机已安装的全部 agency-* 专家技能。 -->
+      <section class="view" id="view-experts">
+        <div class="card agency-expert-toolbar">
+          <div>
+            <span class="eyebrow">EXPERT LIBRARY</span>
+            <h2>专家库</h2>
+            <p class="muted">专家定义来自本机已安装的 Agency 技能，选择后可回到工作台启动编排。</p>
+          </div>
+          <label class="agency-expert-search">
+            <span class="sr-only">搜索专家</span>
+            <input id="agency-expert-search" type="search" placeholder="搜索名称、分类或能力…" autocomplete="off" />
+          </label>
+          <span class="badge" id="agency-expert-count">正在加载</span>
+          <button class="btn btn-ghost btn-sm" id="btn-clear-agency-experts" type="button">清空选择</button>
+          <button class="btn btn-primary btn-sm" id="btn-use-agency-experts" type="button">返回工作台</button>
+        </div>
+        <div class="agency-expert-grid" id="agency-expert-list" aria-live="polite"></div>
+        <div class="agency-expert-empty" id="agency-expert-empty" role="status" hidden>
+          <span class="agency-expert-icon" aria-hidden="true">⌕</span>
+          <h2>没有匹配的专家</h2>
+          <p>请尝试其他关键词。</p>
+        </div>
+      </section>
     </main>
   </div>
+
+  <!-- 模型与密钥配置：密钥只提交给本机后端，页面从不读取已保存的明文。 -->
+  <dialog class="agency-dialog agency-provider-dialog" id="agency-provider-dialog" aria-labelledby="agency-provider-title">
+    <div class="agency-dialog-head">
+      <div>
+        <span class="eyebrow">MODEL PROVIDERS</span>
+        <h2 id="agency-provider-title">模型与密钥</h2>
+        <p>选择已登录的本地 CLI，或配置云端大模型 API。</p>
+      </div>
+      <button class="btn btn-ghost btn-sm" id="btn-close-agency-provider" type="button">关闭</button>
+    </div>
+    <section class="agency-provider-section">
+      <h3>本地 CLI <small>免 Key，使用已登录的工具</small></h3>
+      <div class="agency-provider-grid" id="agency-local-provider-list"></div>
+    </section>
+    <section class="agency-provider-section">
+      <h3>云端大模型 API <small>密钥使用 Windows DPAPI 加密</small></h3>
+      <div class="agency-provider-grid" id="agency-cloud-provider-list"></div>
+    </section>
+    <form class="agency-provider-config" id="agency-provider-config" hidden>
+      <div>
+        <span class="eyebrow">PROVIDER CONFIG</span>
+        <h3 id="agency-provider-config-title">配置云端模型</h3>
+      </div>
+      <input id="agency-provider-id" type="hidden" />
+      <label>API Key
+        <input id="agency-provider-key" type="password" autocomplete="new-password" placeholder="留空表示保留已保存密钥" />
+      </label>
+      <label>模型名称
+        <input id="agency-provider-model" type="text" maxlength="100" required />
+      </label>
+      <div class="agency-provider-config-actions">
+        <button class="btn btn-danger btn-sm" id="btn-clear-agency-provider-key" type="button">删除密钥</button>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost btn-sm" id="btn-cancel-agency-provider-config" type="button">取消</button>
+        <button class="btn btn-primary btn-sm" type="submit">保存配置</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 专家提示词查看器只显示固定技能文件内容，复制操作使用浏览器剪贴板。 -->
+  <dialog class="agency-dialog agency-prompt-dialog" id="agency-prompt-dialog" aria-labelledby="agency-prompt-title">
+    <div class="agency-dialog-head">
+      <h2 id="agency-prompt-title">专家提示词</h2>
+      <button class="btn btn-ghost btn-sm" id="btn-close-agency-prompt" type="button">关闭</button>
+    </div>
+    <pre id="agency-prompt-content"></pre>
+    <button class="btn btn-primary" id="btn-copy-agency-prompt" type="button">复制提示词</button>
+  </dialog>
 
   <!-- 任务及运行记录详情抽屉 -->
   <div class="drawer-backdrop" id="drawer-backdrop"></div>
@@ -531,7 +676,7 @@
     </div>
   </div>
 
-  <script src="app.js?v=20260820-15" defer></script>
+  <script src="app.js?v=20260831-19" defer></script>
 </body>
 </html>
 
